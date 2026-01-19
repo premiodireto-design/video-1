@@ -169,24 +169,25 @@ export async function processVideo(
   });
 
   // Set up MediaRecorder with audio
-  const canvasStream = canvas.captureStream(30);
-  
+  // Use variable frame-rate capture when possible to reduce A/V drift under load.
+  const canvasStream = canvas.captureStream();
+
   // Try to get audio from the video
   let combinedStream: MediaStream;
+  let audioContext: AudioContext | null = null;
   try {
     // Create audio context to capture audio from video
-    const audioContext = new AudioContext();
+    audioContext = new AudioContext({ latencyHint: 'playback' });
     const source = audioContext.createMediaElementSource(video);
     const destination = audioContext.createMediaStreamDestination();
     source.connect(destination);
-    source.connect(audioContext.destination); // Also output to speakers (muted by video element)
-    
+
     // Combine video and audio streams
     const audioTrack = destination.stream.getAudioTracks()[0];
     if (audioTrack) {
       combinedStream = new MediaStream([
         ...canvasStream.getVideoTracks(),
-        audioTrack
+        audioTrack,
       ]);
     } else {
       combinedStream = canvasStream;
@@ -195,7 +196,7 @@ export async function processVideo(
     console.warn('Could not capture audio:', e);
     combinedStream = canvasStream;
   }
-  
+
   // Prefer MP4 when supported (fast downloads, no FFmpeg step). Fallback to WebM.
   // Note: MP4 recording support varies by browser.
   const preferredTypes = [
@@ -209,7 +210,7 @@ export async function processVideo(
   ];
 
   let mimeType = preferredTypes.find((t) => MediaRecorder.isTypeSupported(t)) ?? 'video/webm';
-  
+
   const recorder = new MediaRecorder(combinedStream, {
     mimeType,
     videoBitsPerSecond: settings.maxQuality ? 12000000 : 8000000,
@@ -217,7 +218,7 @@ export async function processVideo(
   });
 
   const chunks: Blob[] = [];
-  
+
   recorder.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) {
       chunks.push(e.data);
@@ -229,27 +230,6 @@ export async function processVideo(
   let animationId: number;
   let isRecording = true;
   const endTime = duration - trimEnd;
-
-  // Draw function
-  const drawFrame = () => {
-    // Check if we've reached the end (minus trim)
-    if (video.currentTime >= endTime || video.ended || video.paused) {
-      if (isRecording) {
-        isRecording = false;
-        // Draw final frame
-        renderFrame();
-        setTimeout(() => {
-          if (recorder.state === 'recording') {
-            recorder.stop();
-          }
-        }, 300);
-      }
-      return;
-    }
-
-    renderFrame();
-    animationId = requestAnimationFrame(drawFrame);
-  };
 
   const renderFrame = () => {
     // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
@@ -281,31 +261,73 @@ export async function processVideo(
     });
   };
 
+  const stopRecording = () => {
+    if (!isRecording) return;
+    isRecording = false;
+    try {
+      renderFrame();
+    } catch {}
+    setTimeout(() => {
+      if (recorder.state === 'recording') {
+        recorder.stop();
+      }
+    }, 300);
+  };
+
+  const scheduleFrames = () => {
+    const anyVideo = video as any;
+    if (typeof anyVideo.requestVideoFrameCallback === 'function') {
+      const onFrame = () => {
+        if (video.currentTime >= endTime || video.ended || video.paused) {
+          stopRecording();
+          return;
+        }
+        renderFrame();
+        anyVideo.requestVideoFrameCallback(onFrame);
+      };
+      anyVideo.requestVideoFrameCallback(onFrame);
+    } else {
+      const drawFrame = () => {
+        if (video.currentTime >= endTime || video.ended || video.paused) {
+          stopRecording();
+          return;
+        }
+        renderFrame();
+        animationId = requestAnimationFrame(drawFrame);
+      };
+      drawFrame();
+    }
+  };
+
   return new Promise<Blob>((resolve, reject) => {
     recorder.onstop = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
-      
+
+      try {
+        audioContext?.close();
+      } catch {}
+
       setTimeout(() => {
         if (chunks.length === 0) {
           reject(new Error('Nenhum dado de vídeo foi capturado'));
           return;
         }
-        
+
         const blob = new Blob(chunks, { type: recorder.mimeType || mimeType });
-        
+
         if (blob.size < 1000) {
           reject(new Error('Vídeo gerado está vazio ou corrompido'));
           return;
         }
-        
+
         onProgress({
           videoId,
           progress: 100,
           stage: 'done',
           message: 'Concluído!',
         });
-        
+
         resolve(blob);
       }, 200);
     };
@@ -313,33 +335,33 @@ export async function processVideo(
     recorder.onerror = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
+      try {
+        audioContext?.close();
+      } catch {}
       reject(new Error('Erro na gravação do vídeo'));
     };
 
     video.onerror = () => {
-      isRecording = false;
+      stopRecording();
       cancelAnimationFrame(animationId);
-      if (recorder.state === 'recording') {
-        recorder.stop();
-      }
+      try {
+        audioContext?.close();
+      } catch {}
       reject(new Error('Erro durante reprodução do vídeo'));
     };
 
-    // Unmute video to capture audio
-    video.muted = false;
-    video.volume = 1;
-    
+    // Keep the element muted (avoids autoplay issues) — audio is still captured via AudioContext.
+    video.muted = true;
+    video.volume = 0;
+
     // Start playback from trim point
-    video.play().then(() => {
-      drawFrame();
-    }).catch((err) => {
-      // If autoplay is blocked, try muted
-      video.muted = true;
-      video.play().then(() => {
-        drawFrame();
-      }).catch((err2) => {
-        reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
-      });
+    video.play().then(async () => {
+      try {
+        await audioContext?.resume();
+      } catch {}
+      scheduleFrames();
+    }).catch((err2) => {
+      reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
     });
   });
 }
