@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
 import { Upload, Video, X, FileVideo, Clock, Maximize } from 'lucide-react';
-import { getVideoInfo } from '@/lib/ffmpegProcessor';
+import { getVideoInfo } from '@/lib/videoProcessor';
 import { cn } from '@/lib/utils';
 
 export interface VideoFile {

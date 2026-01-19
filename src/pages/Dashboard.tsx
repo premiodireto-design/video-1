@@ -7,12 +7,11 @@ import { ProcessingSettings } from '@/components/settings/ProcessingSettings';
 import { ProcessingControls } from '@/components/processing/ProcessingControls';
 import { useToast } from '@/hooks/use-toast';
 import { 
-  loadFFmpeg, 
   processVideo, 
   type ProcessingSettings as ProcessingSettingsType,
   type ProcessingProgress 
-} from '@/lib/ffmpegProcessor';
-import { createTemplateMask, type GreenArea } from '@/lib/greenDetection';
+} from '@/lib/videoProcessor';
+import { type GreenArea } from '@/lib/greenDetection';
 
 export default function Dashboard() {
   const [templateFile, setTemplateFile] = useState<File | null>(null);
@@ -25,8 +24,6 @@ export default function Dashboard() {
     removeBlackBars: false,
   });
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isFFmpegLoading, setIsFFmpegLoading] = useState(false);
-  const [ffmpegLoadProgress, setFFmpegLoadProgress] = useState(0);
   const { toast } = useToast();
 
   const canProcess = templateFile !== null && greenArea !== null && videos.length > 0;
@@ -60,18 +57,8 @@ export default function Dashboard() {
     if (!templateFile || !greenArea) return;
 
     setIsProcessing(true);
-    setIsFFmpegLoading(true);
 
     try {
-      // Load FFmpeg
-      const ff = await loadFFmpeg((loaded, total) => {
-        setFFmpegLoadProgress((loaded / total) * 100);
-      });
-      setIsFFmpegLoading(false);
-
-      // Create template mask (green area transparent)
-      const templateMask = await createTemplateMask(templateFile, greenArea);
-
       // Process videos one by one
       for (const video of videosToProcess) {
         // Update status to processing
@@ -81,10 +68,8 @@ export default function Dashboard() {
 
         try {
           const outputBlob = await processVideo(
-            ff,
             video.file,
             templateFile,
-            templateMask,
             greenArea,
             settings,
             video.id,
@@ -108,22 +93,26 @@ export default function Dashboard() {
         }
       }
 
+      const successCount = videosToProcess.filter(v => {
+        const current = videos.find(cv => cv.id === v.id);
+        return current?.status !== 'failed';
+      }).length;
+
       toast({
         title: 'Processamento concluído!',
-        description: `${videosToProcess.filter(v => v.status !== 'failed').length} vídeo(s) processado(s) com sucesso`,
+        description: `Vídeo(s) processado(s) com sucesso`,
       });
     } catch (error) {
-      console.error('FFmpeg loading error:', error);
+      console.error('Processing error:', error);
       toast({
         variant: 'destructive',
-        title: 'Erro ao carregar processador',
-        description: 'Não foi possível carregar o FFmpeg. Tente recarregar a página.',
+        title: 'Erro no processamento',
+        description: 'Ocorreu um erro ao processar os vídeos.',
       });
     } finally {
       setIsProcessing(false);
-      setIsFFmpegLoading(false);
     }
-  }, [templateFile, greenArea, settings, updateVideoProgress, toast]);
+  }, [templateFile, greenArea, settings, updateVideoProgress, toast, videos]);
 
   const handlePreview = useCallback(() => {
     const queuedVideos = videos.filter(v => v.status === 'queued');
@@ -146,7 +135,7 @@ export default function Dashboard() {
     const url = URL.createObjectURL(video.outputBlob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = video.name.replace(/\.[^/.]+$/, '') + '_canva.mp4';
+    a.download = video.name.replace(/\.[^/.]+$/, '') + '_canva.webm';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -166,7 +155,7 @@ export default function Dashboard() {
     
     completedVideos.forEach((video, index) => {
       if (video.outputBlob) {
-        const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(index + 1).padStart(3, '0')}.mp4`;
+        const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(index + 1).padStart(3, '0')}.webm`;
         zip.file(filename, video.outputBlob);
       }
     });
@@ -230,8 +219,8 @@ export default function Dashboard() {
           <ProcessingControls
             videos={videos}
             isProcessing={isProcessing}
-            isFFmpegLoading={isFFmpegLoading}
-            ffmpegLoadProgress={ffmpegLoadProgress}
+            isFFmpegLoading={false}
+            ffmpegLoadProgress={0}
             overallProgress={overallProgress}
             canProcess={canProcess}
             onPreview={handlePreview}
