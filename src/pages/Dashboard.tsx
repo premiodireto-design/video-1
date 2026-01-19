@@ -148,6 +148,26 @@ export default function Dashboard() {
     const video = videos.find(v => v.id === videoId);
     if (!video?.outputBlob) return;
 
+    const isAlreadyMp4 = video.outputBlob.type.includes('mp4');
+
+    // If we already produced MP4, download instantly (no conversion)
+    if (isAlreadyMp4) {
+      const url = URL.createObjectURL(video.outputBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = video.name.replace(/\.[^/.]+$/, '') + '_canva.mp4';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: 'Download iniciado!',
+        description: 'MP4 gerado direto (sem conversão).',
+      });
+      return;
+    }
+
     setIsConverting(true);
     conversionAbortRef.current = new AbortController();
     setConversionProgress({ current: 0, total: 100, filename: video.name, mode: 'mp4' });
@@ -218,10 +238,14 @@ export default function Dashboard() {
     });
 
     try {
-      // Pre-load FFmpeg converter
-      await loadFFmpegConverter();
-
       const zip = new JSZip();
+
+      // Only load FFmpeg if at least one file needs conversion
+      const needsConversion = completedVideos.some(v => v.outputBlob && !v.outputBlob.type.includes('mp4'));
+      if (needsConversion) {
+        // Pre-load FFmpeg converter
+        await loadFFmpegConverter();
+      }
 
       for (let i = 0; i < completedVideos.length; i++) {
         const video = completedVideos[i];
@@ -235,24 +259,30 @@ export default function Dashboard() {
         });
 
         toast({
-          title: `Convertendo ${i + 1} de ${completedVideos.length}`,
+          title: `Preparando ${i + 1} de ${completedVideos.length}`,
           description: video.name,
         });
 
+        const base = video.name.replace(/\.[^/.]+$/, '');
+        const filename = `${base}_canva_${String(i + 1).padStart(3, '0')}.mp4`;
+
         try {
-          const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
-            signal: conversionAbortRef.current?.signal,
-          });
-          const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(i + 1).padStart(3, '0')}.mp4`;
-          zip.file(filename, mp4Blob);
+          if (video.outputBlob.type.includes('mp4')) {
+            zip.file(filename, video.outputBlob);
+          } else {
+            const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
+              signal: conversionAbortRef.current?.signal,
+            });
+            zip.file(filename, mp4Blob);
+          }
         } catch (err) {
           const isAbort = err instanceof DOMException && err.name === 'AbortError';
           if (isAbort) throw err;
 
           console.error('Error converting video:', video.name, err);
           // Add as WebM if conversion fails
-          const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(i + 1).padStart(3, '0')}.webm`;
-          zip.file(filename, video.outputBlob);
+          const fallback = `${base}_canva_${String(i + 1).padStart(3, '0')}.webm`;
+          zip.file(fallback, video.outputBlob);
         }
       }
 
