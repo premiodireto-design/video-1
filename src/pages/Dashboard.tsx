@@ -11,6 +11,7 @@ import {
   type ProcessingSettings as ProcessingSettingsType,
   type ProcessingProgress 
 } from '@/lib/videoProcessor';
+import { convertWebMToMP4, loadFFmpegConverter } from '@/lib/videoConverter';
 import { type GreenArea } from '@/lib/greenDetection';
 
 export default function Dashboard() {
@@ -24,6 +25,8 @@ export default function Dashboard() {
     removeBlackBars: false,
   });
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isConverting, setIsConverting] = useState(false);
+  const [conversionProgress, setConversionProgress] = useState({ current: 0, total: 0, filename: '' });
   const { toast } = useToast();
 
   const canProcess = templateFile !== null && greenArea !== null && videos.length > 0;
@@ -128,52 +131,128 @@ export default function Dashboard() {
     }
   }, [videos, processVideos]);
 
-  const handleDownloadSingle = useCallback((videoId: string) => {
+  const handleDownloadSingle = useCallback(async (videoId: string) => {
     const video = videos.find(v => v.id === videoId);
     if (!video?.outputBlob) return;
 
-    const url = URL.createObjectURL(video.outputBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = video.name.replace(/\.[^/.]+$/, '') + '_canva.webm';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [videos]);
+    setIsConverting(true);
+    toast({
+      title: 'Convertendo para MP4...',
+      description: 'Aguarde enquanto convertemos o vídeo',
+    });
+
+    try {
+      const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name);
+      
+      const url = URL.createObjectURL(mp4Blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = video.name.replace(/\.[^/.]+$/, '') + '_canva.mp4';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      toast({
+        title: 'Download concluído!',
+        description: 'Vídeo convertido para MP4 com sucesso',
+      });
+    } catch (error) {
+      console.error('Conversion error:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Erro na conversão',
+        description: 'Não foi possível converter para MP4. Baixando como WebM.',
+      });
+      
+      // Fallback to WebM download
+      const url = URL.createObjectURL(video.outputBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = video.name.replace(/\.[^/.]+$/, '') + '_canva.webm';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsConverting(false);
+    }
+  }, [videos, toast]);
 
   const handleDownloadAll = useCallback(async () => {
     const completedVideos = videos.filter(v => v.status === 'completed' && v.outputBlob);
     if (completedVideos.length === 0) return;
 
-    toast({
-      title: 'Preparando ZIP...',
-      description: 'Isso pode levar alguns segundos',
-    });
-
-    const zip = new JSZip();
+    setIsConverting(true);
     
-    completedVideos.forEach((video, index) => {
-      if (video.outputBlob) {
-        const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(index + 1).padStart(3, '0')}.webm`;
-        zip.file(filename, video.outputBlob);
-      }
-    });
-
-    const zipBlob = await zip.generateAsync({ type: 'blob' });
-    const url = URL.createObjectURL(zipBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'videos_processados.zip';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
     toast({
-      title: 'Download iniciado!',
-      description: `${completedVideos.length} vídeo(s) incluído(s) no ZIP`,
+      title: 'Carregando conversor...',
+      description: 'Preparando para converter vídeos para MP4',
     });
+
+    try {
+      // Pre-load FFmpeg converter
+      await loadFFmpegConverter();
+      
+      const zip = new JSZip();
+      
+      for (let i = 0; i < completedVideos.length; i++) {
+        const video = completedVideos[i];
+        if (!video.outputBlob) continue;
+        
+        setConversionProgress({
+          current: i + 1,
+          total: completedVideos.length,
+          filename: video.name,
+        });
+        
+        toast({
+          title: `Convertendo ${i + 1} de ${completedVideos.length}`,
+          description: video.name,
+        });
+        
+        try {
+          const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name);
+          const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(i + 1).padStart(3, '0')}.mp4`;
+          zip.file(filename, mp4Blob);
+        } catch (err) {
+          console.error('Error converting video:', video.name, err);
+          // Add as WebM if conversion fails
+          const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(i + 1).padStart(3, '0')}.webm`;
+          zip.file(filename, video.outputBlob);
+        }
+      }
+
+      toast({
+        title: 'Gerando ZIP...',
+        description: 'Finalizando o arquivo',
+      });
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'videos_processados.zip';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: 'Download concluído!',
+        description: `${completedVideos.length} vídeo(s) em MP4 incluído(s) no ZIP`,
+      });
+    } catch (error) {
+      console.error('Conversion error:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Erro na conversão',
+        description: 'Ocorreu um erro ao converter os vídeos',
+      });
+    } finally {
+      setIsConverting(false);
+      setConversionProgress({ current: 0, total: 0, filename: '' });
+    }
   }, [videos, toast]);
 
   return (
@@ -219,8 +298,8 @@ export default function Dashboard() {
           <ProcessingControls
             videos={videos}
             isProcessing={isProcessing}
-            isFFmpegLoading={false}
-            ffmpegLoadProgress={0}
+            isConverting={isConverting}
+            conversionProgress={conversionProgress}
             overallProgress={overallProgress}
             canProcess={canProcess}
             onPreview={handlePreview}
