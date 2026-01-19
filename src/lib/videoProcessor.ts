@@ -175,25 +175,39 @@ export async function processVideo(
   // Try to get audio from the video
   let combinedStream: MediaStream;
   let audioContext: AudioContext | null = null;
+  let gainNode: GainNode | null = null;
   try {
     // Create audio context to capture audio from video
     audioContext = new AudioContext({ latencyHint: 'playback' });
     const source = audioContext.createMediaElementSource(video);
     const destination = audioContext.createMediaStreamDestination();
-    source.connect(destination);
+    
+    // Create a gain node to control volume (set to 1 for normal volume)
+    gainNode = audioContext.createGain();
+    gainNode.gain.value = 1;
+    
+    // Connect: source -> gain -> destination (for recording)
+    // Also connect to speakers so audio plays during processing (helps sync)
+    source.connect(gainNode);
+    gainNode.connect(destination);
+    // Don't connect to audioContext.destination to keep it silent during processing
 
     // Combine video and audio streams
     const audioTrack = destination.stream.getAudioTracks()[0];
+    console.log('[VideoProcessor] Audio track captured:', !!audioTrack, audioTrack?.label);
+    
     if (audioTrack) {
       combinedStream = new MediaStream([
         ...canvasStream.getVideoTracks(),
         audioTrack,
       ]);
+      console.log('[VideoProcessor] Combined stream tracks:', combinedStream.getTracks().map(t => t.kind));
     } else {
+      console.warn('[VideoProcessor] No audio track found');
       combinedStream = canvasStream;
     }
   } catch (e) {
-    console.warn('Could not capture audio:', e);
+    console.warn('[VideoProcessor] Could not capture audio:', e);
     combinedStream = canvasStream;
   }
 
