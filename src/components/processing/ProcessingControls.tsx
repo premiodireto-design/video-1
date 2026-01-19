@@ -15,6 +15,7 @@ interface ProcessingControlsProps {
   onProcessAll: () => void;
   onDownloadAll: () => void;
   onDownloadSingle: (videoId: string) => void;
+  onCancelConversion?: () => void;
 }
 
 export function ProcessingControls({
@@ -28,6 +29,7 @@ export function ProcessingControls({
   onProcessAll,
   onDownloadAll,
   onDownloadSingle,
+  onCancelConversion,
 }: ProcessingControlsProps) {
   const completedVideos = videos.filter(v => v.status === 'completed');
   const hasCompleted = completedVideos.length > 0;
@@ -110,6 +112,15 @@ export function ProcessingControls({
             >
               <Archive className="h-4 w-4 mr-2" />
               {isConverting ? 'Convertendo...' : 'Baixar tudo em ZIP (MP4)'}
+            </Button>
+          )}
+
+          {isConverting && onCancelConversion && (
+            <Button
+              variant="outline"
+              onClick={onCancelConversion}
+            >
+              Cancelar
             </Button>
           )}
         </div>
