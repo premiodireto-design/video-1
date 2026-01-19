@@ -82,7 +82,7 @@ export function TemplateUpload({ onTemplateDetected, templateFile, greenArea }: 
           Enviar Template (Canva)
         </CardTitle>
         <CardDescription>
-          Envie sua imagem de template 1080x1920 com a área verde (#00FF00) para a janela do vídeo
+          Envie sua imagem de template 1080x1920 com uma área verde (#00FF00) de qualquer tamanho para a janela do vídeo
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -181,12 +181,17 @@ export function TemplateUpload({ onTemplateDetected, templateFile, greenArea }: 
         />
 
         {!previewUrl && (
-          <div className="mt-4 p-3 bg-muted/50 rounded-lg">
-            <h4 className="text-sm font-medium mb-1">💡 Dica</h4>
+          <div className="mt-4 p-3 bg-muted/50 rounded-lg space-y-2">
+            <h4 className="text-sm font-medium mb-1">💡 Como funciona</h4>
             <p className="text-xs text-muted-foreground">
-              No Canva, adicione um retângulo preenchido com verde sólido (#00FF00) onde deseja que o vídeo apareça.
-              Exporte como PNG para manter a qualidade.
+              No Canva, adicione um retângulo preenchido com <span className="font-semibold text-green-500">verde sólido (#00FF00)</span> onde deseja que o vídeo apareça.
             </p>
+            <ul className="text-xs text-muted-foreground list-disc list-inside space-y-1">
+              <li>O template deve ser <span className="font-medium">1080x1920</span> (Full HD vertical)</li>
+              <li>A área verde pode ter <span className="font-medium">qualquer tamanho</span> dentro do template</li>
+              <li>O vídeo será enquadrado automaticamente, priorizando a cabeça (sem cortar o topo)</li>
+              <li>Exporte como PNG para melhor qualidade</li>
+            </ul>
           </div>
         )}
       </CardContent>
