@@ -4,7 +4,6 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
 import { Upload, Video, X, FileVideo, Clock, Maximize } from 'lucide-react';
-import { getVideoInfo } from '@/lib/videoProcessor';
 import { cn } from '@/lib/utils';
 
 export interface VideoFile {
@@ -32,9 +31,47 @@ export function VideoUpload({ videos, onVideosChange, disabled }: VideoUploadPro
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
+  // Fast metadata extraction - only reads first few bytes
+  const getQuickVideoInfo = useCallback(async (file: File): Promise<{ duration: number; width: number; height: number }> => {
+    return new Promise((resolve) => {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      const url = URL.createObjectURL(file);
+      
+      const cleanup = () => {
+        URL.revokeObjectURL(url);
+        video.remove();
+      };
+      
+      // Timeout fallback - if metadata takes too long, use defaults
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve({ duration: 0, width: 0, height: 0 });
+      }, 2000); // 2 second timeout per video
+      
+      video.onloadedmetadata = () => {
+        clearTimeout(timeout);
+        const info = {
+          duration: video.duration || 0,
+          width: video.videoWidth || 0,
+          height: video.videoHeight || 0,
+        };
+        cleanup();
+        resolve(info);
+      };
+      
+      video.onerror = () => {
+        clearTimeout(timeout);
+        cleanup();
+        resolve({ duration: 0, width: 0, height: 0 });
+      };
+      
+      video.src = url;
+    });
+  }, []);
+
   const processVideoFiles = useCallback(async (files: FileList) => {
     setIsLoading(true);
-    const newVideos: VideoFile[] = [];
 
     // Filter valid video files first
     const validFiles = Array.from(files).filter(file => {
@@ -49,37 +86,62 @@ export function VideoUpload({ videos, onVideosChange, disabled }: VideoUploadPro
       return true;
     });
 
-    // Process all videos in parallel for faster loading
-    const results = await Promise.allSettled(
-      validFiles.map(async (file) => {
-        const info = await getVideoInfo(file);
-        return {
-          id: crypto.randomUUID(),
-          file,
-          name: file.name,
-          duration: info.duration,
-          width: info.width,
-          height: info.height,
-          status: 'queued' as const,
-          progress: 0,
-        };
-      })
-    );
+    // Limit to 50 videos per batch
+    const maxVideos = 50;
+    const currentCount = videos.length;
+    const availableSlots = maxVideos - currentCount;
+    
+    if (validFiles.length > availableSlots) {
+      toast({
+        variant: 'destructive',
+        title: 'Limite de vídeos',
+        description: `Máximo de ${maxVideos} vídeos por lote. Você pode adicionar mais ${availableSlots} vídeo(s).`,
+      });
+      validFiles.splice(availableSlots);
+    }
 
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        newVideos.push(result.value);
-      } else {
-        toast({
-          variant: 'destructive',
-          title: 'Erro ao carregar vídeo',
-          description: 'Não foi possível carregar um dos vídeos',
-        });
+    if (validFiles.length === 0) {
+      setIsLoading(false);
+      return;
+    }
+
+    // Process in chunks of 10 for better performance
+    const chunkSize = 10;
+    const newVideos: VideoFile[] = [];
+    
+    for (let i = 0; i < validFiles.length; i += chunkSize) {
+      const chunk = validFiles.slice(i, i + chunkSize);
+      
+      // Process chunk in parallel
+      const results = await Promise.allSettled(
+        chunk.map(async (file) => {
+          const info = await getQuickVideoInfo(file);
+          return {
+            id: crypto.randomUUID(),
+            file,
+            name: file.name,
+            duration: info.duration,
+            width: info.width,
+            height: info.height,
+            status: 'queued' as const,
+            progress: 0,
+          };
+        })
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          newVideos.push(result.value);
+        }
+      }
+      
+      // Update UI after each chunk for faster feedback
+      if (newVideos.length > 0) {
+        onVideosChange([...videos, ...newVideos]);
       }
     }
 
     if (newVideos.length > 0) {
-      onVideosChange([...videos, ...newVideos]);
       toast({
         title: 'Vídeos adicionados',
         description: `${newVideos.length} vídeo(s) adicionado(s) à fila`,
@@ -87,7 +149,7 @@ export function VideoUpload({ videos, onVideosChange, disabled }: VideoUploadPro
     }
 
     setIsLoading(false);
-  }, [videos, onVideosChange, toast]);
+  }, [videos, onVideosChange, toast, getQuickVideoInfo]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -152,7 +214,7 @@ export function VideoUpload({ videos, onVideosChange, disabled }: VideoUploadPro
               Enviar Vídeos (em massa)
             </CardTitle>
             <CardDescription>
-              Envie de 1 a 30 vídeos para processar em lote
+              Envie de 1 a 50 vídeos para processar em lote
             </CardDescription>
           </div>
           {videos.length > 0 && (
@@ -193,7 +255,7 @@ export function VideoUpload({ videos, onVideosChange, disabled }: VideoUploadPro
               {isLoading ? 'Carregando vídeos...' : 'Arraste e solte ou clique para enviar'}
             </p>
             <p className="text-xs text-muted-foreground">
-              MP4, MOV, WEBM • Máximo 30 vídeos
+              MP4, MOV, WEBM • Máximo 50 vídeos
             </p>
           </div>
         </div>
