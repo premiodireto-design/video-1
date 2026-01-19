@@ -19,33 +19,52 @@ export async function loadFFmpegConverter(): Promise<FFmpeg> {
       console.log('[FFmpeg Converter]', message);
     });
 
-    // Single-threaded core (no SharedArrayBuffer needed)
-    // We serve the JS core from our own origin (bundled) and fetch the WASM from a CDN.
-    const coreBaseURL = `${window.location.origin}/ffmpeg`;
+    // Carregar core/wasm/worker via BlobURL evita CORS e costuma ser mais estável.
+    // Observação: o arquivo WASM é grande, então mantemos ele em CDN (não cabe no repo).
 
-    const wasmCandidates = [
-      'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
-      'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
-    ];
+    const localBase = `${window.location.origin}/ffmpeg`;
 
-    let wasmURL: string | null = null;
-    for (const src of wasmCandidates) {
-      try {
-        wasmURL = await toBlobURL(src, 'application/wasm');
-        break;
-      } catch (e) {
-        console.warn('[FFmpeg Converter] Falha ao carregar WASM de', src, e);
+    const pickBlobURL = async (candidates: string[], mime: string, label: string) => {
+      for (const src of candidates) {
+        try {
+          return await toBlobURL(src, mime);
+        } catch (e) {
+          console.warn(`[FFmpeg Converter] Falha ao carregar ${label} de`, src, e);
+        }
       }
-    }
+      throw new Error(`Não foi possível carregar o motor de conversão (${label}).`);
+    };
 
-    if (!wasmURL) {
-      throw new Error('Não foi possível carregar o motor de conversão (WASM).');
-    }
+    const coreURL = await pickBlobURL(
+      [
+        `${localBase}/ffmpeg-core.js`,
+        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+        'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+      ],
+      'text/javascript',
+      'core'
+    );
 
-    await ff.load({
-      coreURL: await toBlobURL(`${coreBaseURL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL,
-    });
+    const wasmURL = await pickBlobURL(
+      [
+        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
+        'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
+      ],
+      'application/wasm',
+      'wasm'
+    );
+
+    const workerURL = await pickBlobURL(
+      [
+        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.worker.js',
+        'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.worker.js',
+        `${localBase}/ffmpeg-core.worker.js`,
+      ],
+      'text/javascript',
+      'worker'
+    );
+
+    await ff.load({ coreURL, wasmURL, workerURL });
 
     ffmpeg = ff;
     return ff;

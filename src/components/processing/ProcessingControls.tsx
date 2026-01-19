@@ -8,12 +8,13 @@ interface ProcessingControlsProps {
   videos: VideoFile[];
   isProcessing: boolean;
   isConverting?: boolean;
-  conversionProgress?: { current: number; total: number; filename: string };
+  conversionProgress?: { current: number; total: number; filename: string; mode: 'mp4' | 'webm' | 'init' };
   overallProgress: number;
   canProcess: boolean;
   onPreview: () => void;
   onProcessAll: () => void;
-  onDownloadAll: () => void;
+  onDownloadAllMp4: () => void;
+  onDownloadAllWebm: () => void;
   onDownloadSingle: (videoId: string) => void;
   onCancelConversion?: () => void;
 }
@@ -27,7 +28,8 @@ export function ProcessingControls({
   canProcess,
   onPreview,
   onProcessAll,
-  onDownloadAll,
+  onDownloadAllMp4,
+  onDownloadAllWebm,
   onDownloadSingle,
   onCancelConversion,
 }: ProcessingControlsProps) {
@@ -105,14 +107,25 @@ export function ProcessingControls({
           </Button>
 
           {hasCompleted && (
-            <Button
-              variant="secondary"
-              onClick={onDownloadAll}
-              disabled={isProcessing || isConverting}
-            >
-              <Archive className="h-4 w-4 mr-2" />
-              {isConverting ? 'Convertendo...' : 'Baixar tudo em ZIP (MP4)'}
-            </Button>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                variant="secondary"
+                onClick={onDownloadAllMp4}
+                disabled={isProcessing || isConverting}
+              >
+                <Archive className="h-4 w-4 mr-2" />
+                {isConverting ? 'Gerando...' : 'Baixar ZIP (MP4)'}
+              </Button>
+
+              <Button
+                variant="secondary"
+                onClick={onDownloadAllWebm}
+                disabled={isProcessing || isConverting}
+              >
+                <Archive className="h-4 w-4 mr-2" />
+                {isConverting ? 'Gerando...' : 'Baixar ZIP (WebM)'}
+              </Button>
+            </div>
           )}
 
           {isConverting && onCancelConversion && (
