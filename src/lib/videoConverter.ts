@@ -125,18 +125,16 @@ export async function convertWebMToMP4(
       ff.on('progress', progressHandler);
     }
 
-    // Convert to MP4 (H.264 + AAC)
+    // Convert to MP4 (H.264 + AAC) - ULTRAFAST mode
     await ff.exec(
       [
         '-i', inputName,
-        '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black',
-        '-r', '30',
         '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-crf', '18',
+        '-preset', 'ultrafast',
+        '-crf', '23',
         '-pix_fmt', 'yuv420p',
         '-c:a', 'aac',
-        '-b:a', '192k',
+        '-b:a', '128k',
         '-movflags', '+faststart',
         '-y',
         outputName,
