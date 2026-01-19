@@ -5,6 +5,7 @@ export interface ProcessingSettings {
   normalizeAudio: boolean;
   maxQuality: boolean;
   removeBlackBars: boolean;
+  watermark?: string; // Optional @ handle for watermark
 }
 
 export interface ProcessingProgress {
@@ -65,11 +66,13 @@ export async function processVideo(
   // Load template image
   const templateImg = await loadImage(templateFile);
   
-  // Load and prepare video
+  // Load and prepare video - CRITICAL: must NOT be muted initially for audio capture
   const video = document.createElement('video');
   video.playsInline = true;
   video.crossOrigin = 'anonymous';
   video.playbackRate = 1;
+  video.muted = false; // Must be false for AudioContext capture to work
+  video.volume = 0.001; // Near-silent but not muted (allows audio capture)
   
   const videoUrl = URL.createObjectURL(videoFile);
   
@@ -264,6 +267,22 @@ export async function processVideo(
     // Draw template mask on top
     ctx.drawImage(maskCanvas, 0, 0);
 
+    // Draw watermark if provided
+    if (settings.watermark && settings.watermark.trim()) {
+      const watermarkText = settings.watermark.trim();
+      // Position: 30% up from the bottom of the green area (where template ends)
+      const templateEndY = y + wh; // Bottom of green area
+      const watermarkY = templateEndY - (wh * 0.30); // 30% up from bottom
+      
+      ctx.save();
+      ctx.font = '28px Arial';
+      ctx.fillStyle = 'rgba(128, 128, 128, 0.5)'; // Medium gray, 50% opacity
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(watermarkText, 1080 / 2, watermarkY);
+      ctx.restore();
+    }
+
     // Update progress
     const currentProgress = video.currentTime - trimStart;
     const progress = 20 + (currentProgress / effectiveDuration) * 75;
@@ -364,9 +383,10 @@ export async function processVideo(
       reject(new Error('Erro durante reprodução do vídeo'));
     };
 
-    // Keep the element muted (avoids autoplay issues) — audio is still captured via AudioContext.
-    video.muted = true;
-    video.volume = 0;
+    // Video must NOT be muted for audio capture to work properly
+    // We set volume very low instead to avoid audible playback
+    video.muted = false;
+    video.volume = 0.001;
 
     // Start playback from trim point
     video.play().then(async () => {

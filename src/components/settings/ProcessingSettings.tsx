@@ -2,7 +2,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Settings, Crop, Square, Volume2, Sparkles, Scissors } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Settings, Crop, Square, Volume2, Sparkles, Scissors, AtSign } from 'lucide-react';
 import type { ProcessingSettings as ProcessingSettingsType } from '@/lib/videoProcessor';
 
 interface ProcessingSettingsProps {
@@ -132,6 +133,29 @@ export function ProcessingSettings({ settings, onSettingsChange, disabled }: Pro
           </div>
         </div>
 
+        {/* Watermark input */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <AtSign className="h-4 w-4 text-muted-foreground" />
+            <div className="flex-1">
+              <Label htmlFor="watermark" className="font-medium">
+                Marca d'água (opcional)
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Digite seu @ para aparecer no vídeo
+              </p>
+            </div>
+          </div>
+          <Input
+            id="watermark"
+            placeholder="@seuarroba"
+            value={settings.watermark || ''}
+            onChange={(e) => onSettingsChange({ ...settings, watermark: e.target.value })}
+            disabled={disabled}
+            className="bg-card"
+            maxLength={50}
+          />
+        </div>
         {/* Output specs */}
         <div className="p-3 bg-muted/50 rounded-lg">
           <h4 className="text-sm font-medium mb-2">Especificações de saída</h4>
