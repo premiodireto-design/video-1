@@ -44,7 +44,8 @@ export async function getVideoInfo(videoFile: File): Promise<{
 }
 
 /**
- * Process video using Canvas API - frame-by-frame composition
+ * Process video using Canvas API with audio support
+ * Outputs WebM with audio, then we'll handle conversion
  */
 export async function processVideo(
   videoFile: File,
@@ -66,7 +67,6 @@ export async function processVideo(
   
   // Load and prepare video
   const video = document.createElement('video');
-  video.muted = true;
   video.playsInline = true;
   video.crossOrigin = 'anonymous';
   
@@ -79,6 +79,18 @@ export async function processVideo(
     video.load();
   });
 
+  const duration = video.duration;
+  const trimStart = 0.5; // Cortar 0.5s do início
+  const trimEnd = 0.5; // Cortar 0.5s do final
+  const effectiveDuration = Math.max(0.5, duration - trimStart - trimEnd);
+  
+  // Set video to start after trim
+  video.currentTime = trimStart;
+  
+  await new Promise<void>((res) => {
+    video.onseeked = () => res();
+  });
+
   onProgress({
     videoId,
     progress: 15,
@@ -86,7 +98,7 @@ export async function processVideo(
     message: 'Preparando canvas...',
   });
 
-  // Create canvas for composition
+  // Create canvas for composition - Full HD vertical
   const canvas = document.createElement('canvas');
   canvas.width = 1080;
   canvas.height = 1920;
@@ -148,20 +160,50 @@ export async function processVideo(
     message: 'Iniciando gravação...',
   });
 
-  // Set up MediaRecorder
-  const stream = canvas.captureStream(30);
+  // Set up MediaRecorder with audio
+  const canvasStream = canvas.captureStream(30);
   
-  let mimeType = 'video/webm;codecs=vp9';
+  // Try to get audio from the video
+  let combinedStream: MediaStream;
+  try {
+    // Create audio context to capture audio from video
+    const audioContext = new AudioContext();
+    const source = audioContext.createMediaElementSource(video);
+    const destination = audioContext.createMediaStreamDestination();
+    source.connect(destination);
+    source.connect(audioContext.destination); // Also output to speakers (muted by video element)
+    
+    // Combine video and audio streams
+    const audioTrack = destination.stream.getAudioTracks()[0];
+    if (audioTrack) {
+      combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        audioTrack
+      ]);
+    } else {
+      combinedStream = canvasStream;
+    }
+  } catch (e) {
+    console.warn('Could not capture audio:', e);
+    combinedStream = canvasStream;
+  }
+  
+  // Use WebM with VP9 for best quality
+  let mimeType = 'video/webm;codecs=vp9,opus';
   if (!MediaRecorder.isTypeSupported(mimeType)) {
-    mimeType = 'video/webm;codecs=vp8';
+    mimeType = 'video/webm;codecs=vp8,opus';
     if (!MediaRecorder.isTypeSupported(mimeType)) {
-      mimeType = 'video/webm';
+      mimeType = 'video/webm;codecs=vp9';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm';
+      }
     }
   }
   
-  const recorder = new MediaRecorder(stream, {
+  const recorder = new MediaRecorder(combinedStream, {
     mimeType,
-    videoBitsPerSecond: settings.maxQuality ? 10000000 : 6000000,
+    videoBitsPerSecond: settings.maxQuality ? 12000000 : 8000000,
+    audioBitsPerSecond: 192000,
   });
 
   const chunks: Blob[] = [];
@@ -172,15 +214,34 @@ export async function processVideo(
     }
   };
 
-  // Request data every 100ms for more reliable capture
   recorder.start(100);
 
-  const duration = video.duration;
   let animationId: number;
   let isRecording = true;
+  const endTime = duration - trimEnd;
 
   // Draw function
   const drawFrame = () => {
+    // Check if we've reached the end (minus trim)
+    if (video.currentTime >= endTime || video.ended || video.paused) {
+      if (isRecording) {
+        isRecording = false;
+        // Draw final frame
+        renderFrame();
+        setTimeout(() => {
+          if (recorder.state === 'recording') {
+            recorder.stop();
+          }
+        }, 300);
+      }
+      return;
+    }
+
+    renderFrame();
+    animationId = requestAnimationFrame(drawFrame);
+  };
+
+  const renderFrame = () => {
     // Clear with black
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, 1080, 1920);
@@ -197,33 +258,28 @@ export async function processVideo(
     ctx.drawImage(maskCanvas, 0, 0);
 
     // Update progress
-    const progress = 20 + (video.currentTime / duration) * 75;
+    const currentProgress = video.currentTime - trimStart;
+    const progress = 20 + (currentProgress / effectiveDuration) * 75;
     onProgress({
       videoId,
-      progress: Math.round(progress),
+      progress: Math.min(95, Math.round(progress)),
       stage: 'encoding',
-      message: `Processando: ${Math.round((video.currentTime / duration) * 100)}%`,
+      message: `Processando: ${Math.round((currentProgress / effectiveDuration) * 100)}%`,
     });
-
-    if (isRecording && !video.ended && !video.paused) {
-      animationId = requestAnimationFrame(drawFrame);
-    }
   };
 
   return new Promise<Blob>((resolve, reject) => {
     recorder.onstop = () => {
       URL.revokeObjectURL(videoUrl);
-      isRecording = false;
       cancelAnimationFrame(animationId);
       
-      // Small delay to ensure all chunks are collected
       setTimeout(() => {
         if (chunks.length === 0) {
           reject(new Error('Nenhum dado de vídeo foi capturado'));
           return;
         }
         
-        const blob = new Blob(chunks, { type: mimeType.split(';')[0] });
+        const blob = new Blob(chunks, { type: 'video/webm' });
         
         if (blob.size < 1000) {
           reject(new Error('Vídeo gerado está vazio ou corrompido'));
@@ -241,23 +297,10 @@ export async function processVideo(
       }, 200);
     };
 
-    recorder.onerror = (e) => {
+    recorder.onerror = () => {
       URL.revokeObjectURL(videoUrl);
-      isRecording = false;
       cancelAnimationFrame(animationId);
       reject(new Error('Erro na gravação do vídeo'));
-    };
-
-    video.onended = () => {
-      // Draw one more frame to capture the last frame
-      drawFrame();
-      
-      // Wait a bit before stopping to ensure last frames are captured
-      setTimeout(() => {
-        if (recorder.state === 'recording') {
-          recorder.stop();
-        }
-      }, 300);
     };
 
     video.onerror = () => {
@@ -269,12 +312,21 @@ export async function processVideo(
       reject(new Error('Erro durante reprodução do vídeo'));
     };
 
-    // Start playback and rendering
-    video.currentTime = 0;
+    // Unmute video to capture audio
+    video.muted = false;
+    video.volume = 1;
+    
+    // Start playback from trim point
     video.play().then(() => {
       drawFrame();
     }).catch((err) => {
-      reject(new Error('Não foi possível reproduzir o vídeo: ' + err.message));
+      // If autoplay is blocked, try muted
+      video.muted = true;
+      video.play().then(() => {
+        drawFrame();
+      }).catch((err2) => {
+        reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
+      });
     });
   });
 }
