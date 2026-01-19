@@ -22,11 +22,29 @@ export async function loadFFmpegConverter(): Promise<FFmpeg> {
     // Single-threaded core (no SharedArrayBuffer needed)
     // We serve the JS core from our own origin (bundled) and fetch the WASM from a CDN.
     const coreBaseURL = `${window.location.origin}/ffmpeg`;
-    const wasmCDN = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
+
+    const wasmCandidates = [
+      'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
+      'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
+    ];
+
+    let wasmURL: string | null = null;
+    for (const src of wasmCandidates) {
+      try {
+        wasmURL = await toBlobURL(src, 'application/wasm');
+        break;
+      } catch (e) {
+        console.warn('[FFmpeg Converter] Falha ao carregar WASM de', src, e);
+      }
+    }
+
+    if (!wasmURL) {
+      throw new Error('Não foi possível carregar o motor de conversão (WASM).');
+    }
 
     await ff.load({
       coreURL: await toBlobURL(`${coreBaseURL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${wasmCDN}/ffmpeg-core.wasm`, 'application/wasm'),
+      wasmURL,
     });
 
     ffmpeg = ff;
@@ -91,14 +109,22 @@ export async function convertWebMToMP4(
   await ff.deleteFile(outputName);
 
   // Convert to Blob - create a new Uint8Array to avoid SharedArrayBuffer issues
-  let blobData: BlobPart;
-  if (data instanceof Uint8Array) {
-    blobData = new Uint8Array(data);
-  } else {
-    blobData = new TextEncoder().encode(data as string);
+  const bytes = data instanceof Uint8Array
+    ? new Uint8Array(data)
+    : new TextEncoder().encode(data as string);
+
+  // Sanity check: MP4 files usually contain the string "ftyp" at offset 4
+  const isMp4 = bytes.length > 12 &&
+    bytes[4] === 0x66 && // f
+    bytes[5] === 0x74 && // t
+    bytes[6] === 0x79 && // y
+    bytes[7] === 0x70;   // p
+
+  if (!isMp4) {
+    throw new Error('Conversão falhou: saída não parece MP4.');
   }
 
-  return new Blob([blobData], { type: 'video/mp4' });
+  return new Blob([bytes], { type: 'video/mp4' });
 }
 
 /**

@@ -69,6 +69,7 @@ export async function processVideo(
   const video = document.createElement('video');
   video.playsInline = true;
   video.crossOrigin = 'anonymous';
+  video.playbackRate = 1;
   
   const videoUrl = URL.createObjectURL(videoFile);
   
@@ -98,11 +99,18 @@ export async function processVideo(
     message: 'Preparando canvas...',
   });
 
-  // Create canvas for composition - Full HD vertical
+  // Create canvas for composition
+  // Performance: when maxQuality=false, render at 720x1280 (faster) and upscale later during MP4 conversion.
+  const renderScale = settings.maxQuality ? 1 : (2 / 3); // 1080->720
+
+  const makeEven = (n: number) => n % 2 === 0 ? n : n - 1;
+
   const canvas = document.createElement('canvas');
-  canvas.width = 1080;
-  canvas.height = 1920;
+  canvas.width = makeEven(Math.round(1080 * renderScale));
+  canvas.height = makeEven(Math.round(1920 * renderScale));
+
   const ctx = canvas.getContext('2d', { alpha: false })!;
+  ctx.imageSmoothingEnabled = true;
 
   // Calculate video scaling
   const { x, y, width: ww, height: wh } = greenArea;
@@ -242,6 +250,9 @@ export async function processVideo(
   };
 
   const renderFrame = () => {
+    // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
+    ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+
     // Clear with black
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, 1080, 1920);
