@@ -237,7 +237,6 @@ export async function processVideo(
 
   // Read output file
   const data = await ff.readFile(outputName);
-  const uint8Array = data instanceof Uint8Array ? data : new TextEncoder().encode(data as string);
   
   // Cleanup
   await ff.deleteFile(inputName);
@@ -252,5 +251,14 @@ export async function processVideo(
     message: 'Concluído!',
   });
 
-  return new Blob([uint8Array], { type: 'video/mp4' });
+  // Convert to proper ArrayBuffer for Blob constructor
+  let blobData: BlobPart;
+  if (data instanceof Uint8Array) {
+    // Create a new Uint8Array with a proper ArrayBuffer (not SharedArrayBuffer)
+    blobData = new Uint8Array(data);
+  } else {
+    blobData = new TextEncoder().encode(data as string);
+  }
+
+  return new Blob([blobData], { type: 'video/mp4' });
 }
