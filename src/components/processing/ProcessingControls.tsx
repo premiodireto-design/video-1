@@ -49,14 +49,13 @@ export function ProcessingControls({
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
                 </span>
-                Processando {videos.filter(v => v.status === 'processing').length} vídeo(s) em paralelo...
+                Processando vídeos...
               </span>
               <span className="font-medium">{Math.round(overallProgress)}%</span>
             </div>
             <Progress value={overallProgress} className="h-2" />
             <p className="text-xs text-muted-foreground">
-              {videos.filter(v => v.status === 'completed').length} de {videos.length} concluído(s) • 
-              <span className="text-primary ml-1">Pode minimizar o navegador!</span>
+              {videos.filter(v => v.status === 'completed').length} de {videos.length} concluído(s)
             </p>
           </div>
         )}
