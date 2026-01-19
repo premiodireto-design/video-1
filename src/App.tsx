@@ -7,6 +7,8 @@ import { AuthProvider } from "@/hooks/useAuth";
 import { PasswordGate } from "@/components/auth/PasswordGate";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
+import AnalyserTikTok from "./pages/AnalyserTikTok";
+import AnalyserInstagram from "./pages/AnalyserInstagram";
 
 const queryClient = new QueryClient();
 
@@ -20,6 +22,8 @@ const App = () => (
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<Index />} />
+              <Route path="/analyser/tiktok" element={<AnalyserTikTok />} />
+              <Route path="/analyser/instagram" element={<AnalyserInstagram />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>
