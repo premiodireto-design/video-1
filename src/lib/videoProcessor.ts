@@ -196,17 +196,19 @@ export async function processVideo(
     combinedStream = canvasStream;
   }
   
-  // Use WebM with VP9 for best quality
-  let mimeType = 'video/webm;codecs=vp9,opus';
-  if (!MediaRecorder.isTypeSupported(mimeType)) {
-    mimeType = 'video/webm;codecs=vp8,opus';
-    if (!MediaRecorder.isTypeSupported(mimeType)) {
-      mimeType = 'video/webm;codecs=vp9';
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'video/webm';
-      }
-    }
-  }
+  // Prefer MP4 when supported (fast downloads, no FFmpeg step). Fallback to WebM.
+  // Note: MP4 recording support varies by browser.
+  const preferredTypes = [
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=vp9',
+    'video/webm',
+  ];
+
+  let mimeType = preferredTypes.find((t) => MediaRecorder.isTypeSupported(t)) ?? 'video/webm';
   
   const recorder = new MediaRecorder(combinedStream, {
     mimeType,
@@ -290,7 +292,7 @@ export async function processVideo(
           return;
         }
         
-        const blob = new Blob(chunks, { type: 'video/webm' });
+        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType });
         
         if (blob.size < 1000) {
           reject(new Error('Vídeo gerado está vazio ou corrompido'));
