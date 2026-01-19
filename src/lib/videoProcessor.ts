@@ -353,29 +353,62 @@ export async function processVideo(
     }, 300);
   };
 
+  // Use a hybrid approach: requestVideoFrameCallback when available, 
+  // but with setTimeout fallback to keep processing when tab is minimized
   const scheduleFrames = () => {
     const anyVideo = video as any;
-    if (typeof anyVideo.requestVideoFrameCallback === 'function') {
-      const onFrame = () => {
-        if (video.currentTime >= endTime || video.ended || video.paused) {
-          stopRecording();
-          return;
-        }
-        renderFrame();
+    let lastTime = performance.now();
+    const targetInterval = 1000 / 30; // 30 FPS target
+    
+    // Fallback timer that continues when tab is backgrounded
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    
+    const onFrame = () => {
+      if (video.currentTime >= endTime || video.ended || video.paused || !isRecording) {
+        if (fallbackTimer) clearTimeout(fallbackTimer);
+        stopRecording();
+        return;
+      }
+      
+      renderFrame();
+      
+      // Calculate when next frame should be
+      const now = performance.now();
+      const elapsed = now - lastTime;
+      lastTime = now;
+      
+      // Use requestVideoFrameCallback if available and tab is visible
+      if (typeof anyVideo.requestVideoFrameCallback === 'function' && document.visibilityState === 'visible') {
         anyVideo.requestVideoFrameCallback(onFrame);
-      };
+      } else if (document.visibilityState === 'visible') {
+        // Use requestAnimationFrame when visible
+        animationId = requestAnimationFrame(onFrame);
+      } else {
+        // Use setTimeout when tab is backgrounded (continues running)
+        const delay = Math.max(1, targetInterval - elapsed);
+        fallbackTimer = setTimeout(onFrame, delay);
+      }
+    };
+    
+    // Handle visibility changes to switch between methods
+    const handleVisibilityChange = () => {
+      // When becoming visible again, the current scheduling will naturally switch
+      // No special handling needed as onFrame checks visibility each time
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Start the frame loop
+    if (typeof anyVideo.requestVideoFrameCallback === 'function') {
       anyVideo.requestVideoFrameCallback(onFrame);
     } else {
-      const drawFrame = () => {
-        if (video.currentTime >= endTime || video.ended || video.paused) {
-          stopRecording();
-          return;
-        }
-        renderFrame();
-        animationId = requestAnimationFrame(drawFrame);
-      };
-      drawFrame();
+      onFrame();
     }
+    
+    // Return cleanup function
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+    };
   };
 
   return new Promise<Blob>((resolve, reject) => {
@@ -434,6 +467,9 @@ export async function processVideo(
     video.muted = false;
     video.volume = 0.001;
 
+    // Cleanup function from scheduleFrames
+    let cleanupFrames: (() => void) | undefined;
+
     // Start playback from trim point
     video.play().then(async () => {
       try {
@@ -447,10 +483,17 @@ export async function processVideo(
 
       // Start recording only after we tried attaching audio
       recorder.start(100);
-      scheduleFrames();
+      cleanupFrames = scheduleFrames();
     }).catch((err2) => {
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
     });
+
+    // Cleanup on stop
+    const originalOnStop = recorder.onstop;
+    recorder.onstop = (e) => {
+      cleanupFrames?.();
+      if (originalOnStop) originalOnStop.call(recorder, e);
+    };
   });
 }
 
