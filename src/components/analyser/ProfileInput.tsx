@@ -19,6 +19,7 @@ const LIMIT_OPTIONS = [
   { value: '100', label: '100 vídeos' },
   { value: '200', label: '200 vídeos' },
   { value: '500', label: '500 vídeos' },
+  { value: '9999', label: 'Todos os vídeos' },
 ];
 
 export function ProfileInput({ 

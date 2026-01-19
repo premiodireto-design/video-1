@@ -260,7 +260,7 @@ async function fetchAllVideos(username: string, maxVideos: number, cookie?: stri
   // Now use V1 API for pagination (more reliable)
   let maxId: string | undefined;
   let pageCount = 0;
-  const maxPages = 30; // Allow up to 30 pages
+  const maxPages = 100; // Allow up to 100 pages for "all videos"
   
   while (results.length < maxVideos && pageCount < maxPages) {
     console.log(`Fetching V1 page ${pageCount + 1}...`);
