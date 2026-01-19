@@ -82,7 +82,26 @@ export async function convertWebMToMP4(
       }
     : null;
 
+  // Always enforce a timeout via AbortSignal as well (some browsers/workers can get stuck).
+  const timeoutMs = options?.timeoutMs ?? 3 * 60 * 1000; // 3 min
+  const internalAbort = new AbortController();
+  const linkAbort = () => {
+    try {
+      internalAbort.abort();
+    } catch {}
+  };
+
+  let timeoutId: number | null = null;
   try {
+    if (options?.signal) {
+      if (options.signal.aborted) linkAbort();
+      else options.signal.addEventListener('abort', linkAbort, { once: true });
+    }
+
+    timeoutId = window.setTimeout(() => {
+      internalAbort.abort();
+    }, timeoutMs);
+
     // Always clean old files if they exist (best-effort)
     try { await ff.deleteFile(inputName); } catch {}
     try { await ff.deleteFile(outputName); } catch {}
@@ -92,8 +111,6 @@ export async function convertWebMToMP4(
     if (progressHandler) {
       ff.on('progress', progressHandler);
     }
-
-    const timeoutMs = options?.timeoutMs ?? 3 * 60 * 1000; // 3 min
 
     // Convert to MP4 (H.264 + AAC)
     await ff.exec(
@@ -112,22 +129,20 @@ export async function convertWebMToMP4(
         outputName,
       ],
       timeoutMs,
-      options?.signal ? { signal: options.signal } : undefined
+      { signal: internalAbort.signal }
     );
 
     const data = await ff.readFile(outputName);
 
-    // Convert to Blob - create a new Uint8Array to avoid SharedArrayBuffer issues
     const bytes = data instanceof Uint8Array
       ? new Uint8Array(data)
       : new TextEncoder().encode(data as string);
 
-    // Sanity check: MP4 files usually contain the string "ftyp" at offset 4
     const isMp4 = bytes.length > 12 &&
-      bytes[4] === 0x66 && // f
-      bytes[5] === 0x74 && // t
-      bytes[6] === 0x79 && // y
-      bytes[7] === 0x70;   // p
+      bytes[4] === 0x66 &&
+      bytes[5] === 0x74 &&
+      bytes[6] === 0x79 &&
+      bytes[7] === 0x70;
 
     if (!isMp4) {
       throw new Error('Conversão falhou: saída não parece MP4.');
@@ -135,21 +150,25 @@ export async function convertWebMToMP4(
 
     return new Blob([bytes], { type: 'video/mp4' });
   } catch (err) {
-    // If cancelled/timeout, kill the worker so the UI doesn't get stuck forever.
     try {
-      if (ff) ff.terminate();
+      ff.terminate();
     } catch {}
     ffmpeg = null;
-
     throw err;
   } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+    if (options?.signal) {
+      try {
+        options.signal.removeEventListener('abort', linkAbort);
+      } catch {}
+    }
+
     if (progressHandler) {
       try {
         ff.off('progress', progressHandler);
       } catch {}
     }
 
-    // Cleanup (best-effort)
     try { await ff.deleteFile(inputName); } catch {}
     try { await ff.deleteFile(outputName); } catch {}
   }
