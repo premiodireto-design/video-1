@@ -303,9 +303,11 @@ export async function processVideo(
     ctx.fillRect(0, 0, 1080, 1920);
 
     // Draw video in the green area position with clipping
+    // Use a slightly larger clip area (2px margin) to ensure no green edge pixels are visible
+    const margin = 2;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x, y, ww, wh);
+    ctx.rect(x + margin, y + margin, ww - margin * 2, wh - margin * 2);
     ctx.clip();
     ctx.drawImage(video, x + offsetX, y + offsetY, scaledW, scaledH);
     ctx.restore();
