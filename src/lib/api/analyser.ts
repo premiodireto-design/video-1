@@ -1,6 +1,7 @@
+import { supabase } from '@/integrations/supabase/client';
 import type { AnalyserVideo } from '@/types/analyser';
 
-interface ApiResponse<T = any> {
+interface ApiResponse<T = unknown> {
   success: boolean;
   error?: string;
   data?: T;
@@ -11,24 +12,55 @@ interface UserFeedData {
   username: string;
   totalCount: number;
   hasMore?: boolean;
+  cursor?: string;
 }
 
-// ⚠️ Integrações oficiais ainda não configuradas neste projeto.
-// Mantemos esta camada para quando você quiser habilitar:
-// - TikTok: apenas APIs oficiais aprovadas pelo TikTok
-// - Instagram: Meta/Instagram Graph API com OAuth (conta Business/Creator)
 export const analyserApi = {
-  async getTikTokUserFeed(_username: string): Promise<ApiResponse<UserFeedData>> {
-    return {
-      success: false,
-      error: 'Integração oficial do TikTok não configurada. Use o Modo Upload.',
-    };
+  async getInstagramUserFeed(username: string, limit: number = 50): Promise<ApiResponse<UserFeedData>> {
+    try {
+      const { data, error } = await supabase.functions.invoke('instagram-feed', {
+        body: { username, limit },
+      });
+      
+      if (error) {
+        console.error('Edge function error:', error);
+        return {
+          success: false,
+          error: error.message || 'Erro ao carregar feed do Instagram',
+        };
+      }
+      
+      if (!data?.success) {
+        return {
+          success: false,
+          error: data?.error || 'Erro desconhecido',
+        };
+      }
+      
+      return {
+        success: true,
+        data: {
+          videos: data.data.videos,
+          username: data.data.username,
+          totalCount: data.data.totalCount,
+          hasMore: data.data.hasMore,
+          cursor: data.data.cursor,
+        },
+      };
+    } catch (err) {
+      console.error('API Error:', err);
+      return {
+        success: false,
+        error: 'Erro de conexão ao carregar Instagram',
+      };
+    }
   },
 
-  async getInstagramUserFeed(_username: string): Promise<ApiResponse<UserFeedData>> {
+  async getTikTokUserFeed(_username: string, _limit: number = 50): Promise<ApiResponse<UserFeedData>> {
+    // TikTok implementation will come next
     return {
       success: false,
-      error: 'Integração oficial do Instagram não configurada. Use o Modo Upload.',
+      error: 'TikTok Analyser em desenvolvimento',
     };
   },
 };
