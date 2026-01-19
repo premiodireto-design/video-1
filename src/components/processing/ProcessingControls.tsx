@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { DebugLogPanel } from '@/components/debug/DebugLogPanel';
 import { Play, Loader2, Download, Eye, Archive } from 'lucide-react';
 import type { VideoFile } from '@/components/video/VideoUpload';
 
@@ -159,6 +160,9 @@ export function ProcessingControls({
             </div>
           </div>
         )}
+
+        {/* Debug logs (click to expand) */}
+        <DebugLogPanel />
 
         {/* Help text */}
         {!canProcess && !isProcessing && (
