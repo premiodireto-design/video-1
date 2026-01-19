@@ -7,8 +7,8 @@ import type { VideoFile } from '@/components/video/VideoUpload';
 interface ProcessingControlsProps {
   videos: VideoFile[];
   isProcessing: boolean;
-  isFFmpegLoading: boolean;
-  ffmpegLoadProgress: number;
+  isConverting?: boolean;
+  conversionProgress?: { current: number; total: number; filename: string };
   overallProgress: number;
   canProcess: boolean;
   onPreview: () => void;
@@ -20,8 +20,8 @@ interface ProcessingControlsProps {
 export function ProcessingControls({
   videos,
   isProcessing,
-  isFFmpegLoading,
-  ffmpegLoadProgress,
+  isConverting = false,
+  conversionProgress,
   overallProgress,
   canProcess,
   onPreview,
@@ -31,24 +31,12 @@ export function ProcessingControls({
 }: ProcessingControlsProps) {
   const completedVideos = videos.filter(v => v.status === 'completed');
   const hasCompleted = completedVideos.length > 0;
-  const allCompleted = completedVideos.length === videos.length && videos.length > 0;
 
   return (
     <Card className="border-border/50 sticky bottom-4">
       <CardContent className="p-4">
-        {/* FFmpeg loading state */}
-        {isFFmpegLoading && (
-          <div className="mb-4 space-y-2">
-            <div className="flex items-center gap-2 text-sm">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Carregando processador de vídeo...</span>
-            </div>
-            <Progress value={ffmpegLoadProgress} className="h-2" />
-          </div>
-        )}
-
         {/* Processing progress */}
-        {isProcessing && !isFFmpegLoading && (
+        {isProcessing && (
           <div className="mb-4 space-y-2">
             <div className="flex items-center justify-between text-sm">
               <span>Processando vídeos...</span>
@@ -61,12 +49,36 @@ export function ProcessingControls({
           </div>
         )}
 
+        {/* Conversion progress */}
+        {isConverting && conversionProgress && conversionProgress.total > 0 && (
+          <div className="mb-4 space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Convertendo para MP4...
+              </span>
+              <span className="font-medium">{conversionProgress.current} de {conversionProgress.total}</span>
+            </div>
+            <Progress value={(conversionProgress.current / conversionProgress.total) * 100} className="h-2" />
+            <p className="text-xs text-muted-foreground truncate">
+              {conversionProgress.filename}
+            </p>
+          </div>
+        )}
+
+        {isConverting && (!conversionProgress || conversionProgress.total === 0) && (
+          <div className="mb-4 flex items-center gap-2 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Convertendo para MP4...</span>
+          </div>
+        )}
+
         {/* Action buttons */}
         <div className="flex flex-wrap gap-3">
           <Button
             variant="outline"
             onClick={onPreview}
-            disabled={!canProcess || isProcessing || isFFmpegLoading}
+            disabled={!canProcess || isProcessing || isConverting}
           >
             <Eye className="h-4 w-4 mr-2" />
             Pré-visualizar
@@ -74,7 +86,7 @@ export function ProcessingControls({
 
           <Button
             onClick={onProcessAll}
-            disabled={!canProcess || isProcessing || isFFmpegLoading}
+            disabled={!canProcess || isProcessing || isConverting}
             className="flex-1 sm:flex-none"
           >
             {isProcessing ? (
@@ -91,23 +103,21 @@ export function ProcessingControls({
           </Button>
 
           {hasCompleted && (
-            <>
-              <Button
-                variant="secondary"
-                onClick={onDownloadAll}
-                disabled={isProcessing}
-              >
-                <Archive className="h-4 w-4 mr-2" />
-                Baixar tudo em ZIP
-              </Button>
-            </>
+            <Button
+              variant="secondary"
+              onClick={onDownloadAll}
+              disabled={isProcessing || isConverting}
+            >
+              <Archive className="h-4 w-4 mr-2" />
+              {isConverting ? 'Convertendo...' : 'Baixar tudo em ZIP (MP4)'}
+            </Button>
           )}
         </div>
 
         {/* Individual download buttons for completed videos */}
         {hasCompleted && (
           <div className="mt-4 pt-4 border-t">
-            <p className="text-sm font-medium mb-2">Downloads individuais:</p>
+            <p className="text-sm font-medium mb-2">Downloads individuais (MP4):</p>
             <div className="flex flex-wrap gap-2">
               {completedVideos.map((video) => (
                 <Button
@@ -115,6 +125,7 @@ export function ProcessingControls({
                   variant="ghost"
                   size="sm"
                   onClick={() => onDownloadSingle(video.id)}
+                  disabled={isConverting}
                   className="text-xs"
                 >
                   <Download className="h-3 w-3 mr-1" />
