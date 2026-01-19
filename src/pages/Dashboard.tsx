@@ -23,6 +23,7 @@ export default function Dashboard() {
     normalizeAudio: false,
     maxQuality: false,
     removeBlackBars: false,
+    watermark: '',
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
