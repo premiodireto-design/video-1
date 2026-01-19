@@ -103,21 +103,73 @@ function parsePostData(node: any): InstagramMedia | null {
   }
 }
 
-// Fetch Instagram profile data
-async function fetchInstagramProfile(username: string, limit: number): Promise<InstagramMedia[]> {
-  const results: InstagramMedia[] = [];
-  
-  const userAgents = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-  ];
-  
+const userAgents = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+];
+
+// Fetch a single page of posts using GraphQL
+async function fetchGraphQLPage(
+  userId: string, 
+  first: number = 50, 
+  after?: string
+): Promise<{ posts: any[]; hasNextPage: boolean; endCursor?: string }> {
   const userAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
   
-  // Method 1: Try the web profile info API
+  const variables = {
+    id: userId,
+    first,
+    after: after || null,
+  };
+  
+  // This is the query hash for user media
+  const queryHash = 'e769aa130647d2354c40ea6a439bfc08';
+  const graphqlUrl = `https://www.instagram.com/graphql/query/?query_hash=${queryHash}&variables=${encodeURIComponent(JSON.stringify(variables))}`;
+  
   try {
-    console.log('Trying web profile info API...');
+    const response = await fetch(graphqlUrl, {
+      headers: {
+        'User-Agent': userAgent,
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'X-IG-App-ID': '936619743392459',
+        'X-ASBD-ID': '129477',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Referer': 'https://www.instagram.com/',
+      },
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      const mediaData = data?.data?.user?.edge_owner_to_timeline_media;
+      
+      if (mediaData) {
+        return {
+          posts: mediaData.edges || [],
+          hasNextPage: mediaData.page_info?.has_next_page || false,
+          endCursor: mediaData.page_info?.end_cursor,
+        };
+      }
+    }
+  } catch (err) {
+    console.log('GraphQL page fetch failed:', err);
+  }
+  
+  return { posts: [], hasNextPage: false };
+}
+
+// Get user ID and initial posts from profile
+async function getProfileData(username: string): Promise<{ 
+  userId?: string; 
+  posts: any[]; 
+  hasNextPage: boolean; 
+  endCursor?: string;
+  totalCount?: number;
+}> {
+  const userAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
+  
+  try {
+    console.log('Fetching profile data...');
     const response = await fetch(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
       headers: {
         'User-Agent': userAgent,
@@ -135,156 +187,103 @@ async function fetchInstagramProfile(username: string, limit: number): Promise<I
     
     if (response.ok) {
       const data = await response.json();
-      console.log('Got web profile info response');
-      
       const user = data?.data?.user;
-      if (user?.edge_owner_to_timeline_media?.edges) {
-        for (const edge of user.edge_owner_to_timeline_media.edges.slice(0, limit)) {
-          const node = edge.node;
-          // Only include videos
-          if (node.is_video) {
-            const media = parsePostData(node);
-            if (media) results.push(media);
-          }
-        }
-      }
       
-      // Also check reels
-      if (user?.edge_felix_video_timeline?.edges) {
-        for (const edge of user.edge_felix_video_timeline.edges.slice(0, limit)) {
-          const node = edge.node;
-          const media = parsePostData(node);
-          if (media && !results.find(r => r.id === media.id)) {
-            results.push(media);
-          }
-        }
+      if (user) {
+        const mediaData = user.edge_owner_to_timeline_media;
+        const reelsData = user.edge_felix_video_timeline;
+        
+        // Prefer reels data if available, otherwise use timeline
+        const primaryData = (reelsData?.count > 0) ? reelsData : mediaData;
+        
+        console.log(`Profile found. User ID: ${user.id}, Total posts: ${mediaData?.count || 0}, Reels: ${reelsData?.count || 0}`);
+        
+        return {
+          userId: user.id,
+          posts: primaryData?.edges || [],
+          hasNextPage: primaryData?.page_info?.has_next_page || false,
+          endCursor: primaryData?.page_info?.end_cursor,
+          totalCount: primaryData?.count || 0,
+        };
       }
     } else {
-      console.log('Web profile info API failed:', response.status);
+      console.log('Profile API returned:', response.status);
     }
   } catch (err) {
-    console.log('Web profile info method failed:', err);
+    console.log('Profile fetch failed:', err);
   }
   
-  if (results.length > 0) {
-    console.log(`Found ${results.length} videos via web profile info`);
-    return results.slice(0, limit);
+  return { posts: [], hasNextPage: false };
+}
+
+// Fetch all videos with pagination
+async function fetchAllVideos(username: string, maxVideos: number): Promise<InstagramMedia[]> {
+  const results: InstagramMedia[] = [];
+  const seenIds = new Set<string>();
+  
+  // Get initial profile data
+  const profileData = await getProfileData(username);
+  
+  if (!profileData.userId) {
+    console.log('Could not get user ID');
+    return results;
   }
   
-  // Method 2: Try to get from the public profile page
-  try {
-    console.log('Trying profile page scrape...');
-    const response = await fetch(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
-      headers: {
-        'User-Agent': userAgent,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache',
-      },
-    });
+  console.log(`Total content count: ${profileData.totalCount}`);
+  
+  // Process initial posts
+  for (const edge of profileData.posts) {
+    const node = edge.node;
+    if (node.is_video || node.__typename === 'GraphVideo') {
+      const media = parsePostData(node);
+      if (media && !seenIds.has(media.id)) {
+        seenIds.add(media.id);
+        results.push(media);
+      }
+    }
+  }
+  
+  console.log(`Got ${results.length} videos from initial fetch`);
+  
+  // If we need more and there are more pages, fetch them
+  let hasMore = profileData.hasNextPage;
+  let cursor = profileData.endCursor;
+  let pageCount = 1;
+  const maxPages = Math.ceil(maxVideos / 12) + 1; // Instagram returns ~12 per page
+  
+  while (hasMore && results.length < maxVideos && pageCount < maxPages) {
+    console.log(`Fetching page ${pageCount + 1}... (cursor: ${cursor?.slice(0, 20)}...)`);
     
-    if (response.ok) {
-      const html = await response.text();
-      
-      // Try to find JSON data in script tags
-      const patterns = [
-        /window\._sharedData\s*=\s*({.+?});<\/script>/s,
-        /window\.__additionalDataLoaded\s*\([^,]+,\s*({.+?})\);<\/script>/s,
-        /<script type="application\/json" data-sjs>({.+?})<\/script>/s,
-      ];
-      
-      for (const pattern of patterns) {
-        const match = html.match(pattern);
-        if (match) {
-          try {
-            const data = JSON.parse(match[1]);
-            console.log('Found JSON data in page');
-            
-            // Try different data paths
-            const user = data?.entry_data?.ProfilePage?.[0]?.graphql?.user ||
-                        data?.graphql?.user ||
-                        data?.data?.user;
-            
-            if (user) {
-              const edges = user.edge_owner_to_timeline_media?.edges || 
-                           user.edge_felix_video_timeline?.edges || [];
-              
-              for (const edge of edges.slice(0, limit)) {
-                const node = edge.node;
-                if (node.is_video || node.__typename === 'GraphVideo') {
-                  const media = parsePostData(node);
-                  if (media) results.push(media);
-                }
-              }
-            }
-          } catch (parseErr) {
-            console.log('Failed to parse JSON:', parseErr);
-          }
+    // Small delay to avoid rate limiting
+    await new Promise(r => setTimeout(r, 500));
+    
+    const pageData = await fetchGraphQLPage(profileData.userId, 50, cursor);
+    
+    if (pageData.posts.length === 0) {
+      console.log('No more posts returned');
+      break;
+    }
+    
+    for (const edge of pageData.posts) {
+      const node = edge.node;
+      if (node.is_video || node.__typename === 'GraphVideo') {
+        const media = parsePostData(node);
+        if (media && !seenIds.has(media.id)) {
+          seenIds.add(media.id);
+          results.push(media);
         }
       }
     }
-  } catch (err) {
-    console.log('Profile page scrape failed:', err);
-  }
-  
-  if (results.length > 0) {
-    console.log(`Found ${results.length} videos via page scrape`);
-    return results.slice(0, limit);
-  }
-  
-  // Method 3: Try the graphql query endpoint
-  try {
-    console.log('Trying graphql endpoint...');
     
-    // First, get user ID from the profile page
-    const profileResponse = await fetch(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
-      headers: { 'User-Agent': userAgent },
-    });
+    console.log(`Page ${pageCount + 1}: Found ${results.length} total videos`);
     
-    if (profileResponse.ok) {
-      const html = await profileResponse.text();
-      const userIdMatch = html.match(/"profilePage_([0-9]+)"/);
-      
-      if (userIdMatch) {
-        const userId = userIdMatch[1];
-        console.log('Found user ID:', userId);
-        
-        const variables = JSON.stringify({
-          id: userId,
-          first: limit,
-        });
-        
-        const queryHash = 'e769aa130647d2354c40ea6a439bfc08';
-        const graphqlUrl = `https://www.instagram.com/graphql/query/?query_hash=${queryHash}&variables=${encodeURIComponent(variables)}`;
-        
-        const graphqlResponse = await fetch(graphqlUrl, {
-          headers: {
-            'User-Agent': userAgent,
-            'Accept': '*/*',
-            'X-IG-App-ID': '936619743392459',
-          },
-        });
-        
-        if (graphqlResponse.ok) {
-          const data = await graphqlResponse.json();
-          const edges = data?.data?.user?.edge_owner_to_timeline_media?.edges || [];
-          
-          for (const edge of edges.slice(0, limit)) {
-            const node = edge.node;
-            if (node.is_video) {
-              const media = parsePostData(node);
-              if (media) results.push(media);
-            }
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.log('GraphQL method failed:', err);
+    hasMore = pageData.hasNextPage;
+    cursor = pageData.endCursor;
+    pageCount++;
   }
   
-  console.log(`Total results: ${results.length}`);
-  return results.slice(0, limit);
+  console.log(`Final count: ${results.length} videos`);
+  return results.slice(0, maxVideos);
 }
 
 serve(async (req) => {
@@ -303,9 +302,9 @@ serve(async (req) => {
     }
     
     const cleanUsername = extractUsername(username);
-    console.log(`Fetching Instagram feed for: ${cleanUsername}, limit: ${limit}`);
+    console.log(`=== Fetching Instagram feed for: ${cleanUsername}, limit: ${limit} ===`);
     
-    const videos = await fetchInstagramProfile(cleanUsername, limit);
+    const videos = await fetchAllVideos(cleanUsername, limit);
     
     if (videos.length === 0) {
       return new Response(
