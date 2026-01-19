@@ -150,6 +150,7 @@ export default function Dashboard() {
 
     setIsConverting(true);
     conversionAbortRef.current = new AbortController();
+    setConversionProgress({ current: 0, total: 100, filename: video.name });
 
     toast({
       title: 'Convertendo para MP4...',
@@ -159,6 +160,9 @@ export default function Dashboard() {
     try {
       const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
         signal: conversionAbortRef.current.signal,
+        onProgress: (p) => {
+          setConversionProgress({ current: p, total: 100, filename: video.name });
+        },
       });
 
       const url = URL.createObjectURL(mp4Blob);
@@ -171,12 +175,12 @@ export default function Dashboard() {
       URL.revokeObjectURL(url);
 
       toast({
-        title: 'Download concluído!',
-        description: 'Vídeo convertido para MP4 com sucesso',
+        title: 'Download iniciado!',
+        description: 'Se não baixar automaticamente, tente novamente (ou desative bloqueio de pop-up).',
       });
     } catch (error) {
       const isAbort = error instanceof DOMException && error.name === 'AbortError';
-      if (isAbort) return; // cancel already toasted
+      if (isAbort) return;
 
       console.error('Conversion error:', error);
       toast({
@@ -185,7 +189,6 @@ export default function Dashboard() {
         description: 'Não foi possível converter para MP4. Baixando como WebM.',
       });
 
-      // Fallback to WebM download
       const url = URL.createObjectURL(video.outputBlob);
       const a = document.createElement('a');
       a.href = url;
@@ -197,6 +200,7 @@ export default function Dashboard() {
     } finally {
       conversionAbortRef.current = null;
       setIsConverting(false);
+      setConversionProgress({ current: 0, total: 0, filename: '' });
     }
   }, [videos, toast]);
 
