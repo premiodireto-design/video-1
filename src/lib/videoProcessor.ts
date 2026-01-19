@@ -278,7 +278,7 @@ export async function processVideo(
       const watermarkText = settings.watermark.trim();
       // Position: 30% up from the bottom of the green area (where template ends)
       const templateEndY = y + wh; // Bottom of green area
-      const watermarkY = templateEndY - (wh * 0.30); // 30% up from bottom
+      const watermarkY = templateEndY - (wh * 0.15); // 15% up from bottom
       
       ctx.save();
       ctx.font = '28px Arial';
