@@ -36,33 +36,44 @@ export function VideoUpload({ videos, onVideosChange, disabled }: VideoUploadPro
     setIsLoading(true);
     const newVideos: VideoFile[] = [];
 
-    for (const file of Array.from(files)) {
+    // Filter valid video files first
+    const validFiles = Array.from(files).filter(file => {
       if (!file.type.startsWith('video/')) {
         toast({
           variant: 'destructive',
           title: 'Arquivo inválido',
           description: `${file.name} não é um vídeo válido`,
         });
-        continue;
+        return false;
       }
+      return true;
+    });
 
-      try {
+    // Process all videos in parallel for faster loading
+    const results = await Promise.allSettled(
+      validFiles.map(async (file) => {
         const info = await getVideoInfo(file);
-        newVideos.push({
+        return {
           id: crypto.randomUUID(),
           file,
           name: file.name,
           duration: info.duration,
           width: info.width,
           height: info.height,
-          status: 'queued',
+          status: 'queued' as const,
           progress: 0,
-        });
-      } catch (error) {
+        };
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        newVideos.push(result.value);
+      } else {
         toast({
           variant: 'destructive',
           title: 'Erro ao carregar vídeo',
-          description: `Não foi possível carregar ${file.name}`,
+          description: 'Não foi possível carregar um dos vídeos',
         });
       }
     }
