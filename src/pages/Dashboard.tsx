@@ -27,7 +27,7 @@ export default function Dashboard() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
   const conversionAbortRef = useRef<AbortController | null>(null);
-  const [conversionProgress, setConversionProgress] = useState({ current: 0, total: 0, filename: '' });
+  const [conversionProgress, setConversionProgress] = useState<{ current: number; total: number; filename: string; mode: 'mp4' | 'webm' | 'init' }>({ current: 0, total: 0, filename: '', mode: 'init' });
   const { toast } = useToast();
 
   const canProcess = templateFile !== null && greenArea !== null && videos.length > 0;
@@ -136,10 +136,10 @@ export default function Dashboard() {
     conversionAbortRef.current?.abort();
     conversionAbortRef.current = null;
     setIsConverting(false);
-    setConversionProgress({ current: 0, total: 0, filename: '' });
+    setConversionProgress({ current: 0, total: 0, filename: '', mode: 'init' });
 
     toast({
-      title: 'Conversão cancelada',
+      title: 'Ação cancelada',
       description: 'Você pode tentar baixar novamente.',
     });
   }, [toast]);
@@ -150,7 +150,7 @@ export default function Dashboard() {
 
     setIsConverting(true);
     conversionAbortRef.current = new AbortController();
-    setConversionProgress({ current: 0, total: 100, filename: video.name });
+    setConversionProgress({ current: 0, total: 100, filename: video.name, mode: 'mp4' });
 
     toast({
       title: 'Convertendo para MP4...',
@@ -161,7 +161,7 @@ export default function Dashboard() {
       const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
         signal: conversionAbortRef.current.signal,
         onProgress: (p) => {
-          setConversionProgress({ current: p, total: 100, filename: video.name });
+          setConversionProgress({ current: p, total: 100, filename: video.name, mode: 'mp4' });
         },
       });
 
@@ -200,16 +200,17 @@ export default function Dashboard() {
     } finally {
       conversionAbortRef.current = null;
       setIsConverting(false);
-      setConversionProgress({ current: 0, total: 0, filename: '' });
+      setConversionProgress({ current: 0, total: 0, filename: '', mode: 'init' });
     }
   }, [videos, toast]);
 
-  const handleDownloadAll = useCallback(async () => {
+  const handleDownloadAllMp4 = useCallback(async () => {
     const completedVideos = videos.filter(v => v.status === 'completed' && v.outputBlob);
     if (completedVideos.length === 0) return;
 
     setIsConverting(true);
     conversionAbortRef.current = new AbortController();
+    setConversionProgress({ current: 0, total: 0, filename: '', mode: 'init' });
 
     toast({
       title: 'Carregando conversor...',
@@ -230,6 +231,7 @@ export default function Dashboard() {
           current: i + 1,
           total: completedVideos.length,
           filename: video.name,
+          mode: 'mp4',
         });
 
         toast({
@@ -263,7 +265,7 @@ export default function Dashboard() {
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'videos_processados.zip';
+      a.download = 'videos_processados_mp4.zip';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -271,7 +273,7 @@ export default function Dashboard() {
 
       toast({
         title: 'Download concluído!',
-        description: `${completedVideos.length} vídeo(s) em MP4 incluído(s) no ZIP`,
+        description: `${completedVideos.length} vídeo(s) incluído(s) no ZIP`,
       });
     } catch (error) {
       const isAbort = error instanceof DOMException && error.name === 'AbortError';
@@ -280,13 +282,78 @@ export default function Dashboard() {
       console.error('Conversion error:', error);
       toast({
         variant: 'destructive',
-        title: 'Erro na conversão',
-        description: 'Ocorreu um erro ao converter os vídeos',
+        title: 'Erro ao gerar ZIP',
+        description: error instanceof Error ? error.message : 'Ocorreu um erro ao converter os vídeos',
       });
     } finally {
       conversionAbortRef.current = null;
       setIsConverting(false);
-      setConversionProgress({ current: 0, total: 0, filename: '' });
+      setConversionProgress({ current: 0, total: 0, filename: '', mode: 'init' });
+    }
+  }, [videos, toast]);
+
+  const handleDownloadAllWebm = useCallback(async () => {
+    const completedVideos = videos.filter(v => v.status === 'completed' && v.outputBlob);
+    if (completedVideos.length === 0) return;
+
+    setIsConverting(true);
+    conversionAbortRef.current = new AbortController();
+
+    toast({
+      title: 'Gerando ZIP (WebM)...',
+      description: 'Preparando seus vídeos',
+    });
+
+    try {
+      const zip = new JSZip();
+
+      for (let i = 0; i < completedVideos.length; i++) {
+        const video = completedVideos[i];
+        if (!video.outputBlob) continue;
+
+        if (conversionAbortRef.current?.signal.aborted) {
+          throw new DOMException('Aborted', 'AbortError');
+        }
+
+        setConversionProgress({
+          current: i + 1,
+          total: completedVideos.length,
+          filename: video.name,
+          mode: 'webm',
+        });
+
+        const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(i + 1).padStart(3, '0')}.webm`;
+        zip.file(filename, video.outputBlob);
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'videos_processados_webm.zip';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: 'Download concluído!',
+        description: `${completedVideos.length} vídeo(s) incluído(s) no ZIP`,
+      });
+    } catch (error) {
+      const isAbort = error instanceof DOMException && error.name === 'AbortError';
+      if (isAbort) return;
+
+      console.error('ZIP error:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Erro ao gerar ZIP',
+        description: error instanceof Error ? error.message : 'Ocorreu um erro ao gerar o ZIP',
+      });
+    } finally {
+      conversionAbortRef.current = null;
+      setIsConverting(false);
+      setConversionProgress({ current: 0, total: 0, filename: '', mode: 'init' });
     }
   }, [videos, toast]);
 
@@ -339,7 +406,8 @@ export default function Dashboard() {
             canProcess={canProcess}
             onPreview={handlePreview}
             onProcessAll={handleProcessAll}
-            onDownloadAll={handleDownloadAll}
+            onDownloadAllMp4={handleDownloadAllMp4}
+            onDownloadAllWebm={handleDownloadAllWebm}
             onDownloadSingle={handleDownloadSingle}
             onCancelConversion={handleCancelConversion}
           />
