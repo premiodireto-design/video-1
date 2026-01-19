@@ -1,7 +1,6 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import JSZip from 'jszip';
-import { analyserApi } from '@/lib/api/analyser';
 import type { 
   AnalyserVideo, 
   VideoFilters, 
@@ -95,53 +94,25 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
   const totalComments = useMemo(() => 
     filteredVideos.reduce((sum, v) => sum + v.comments, 0), [filteredVideos]);
 
-  // Connect (not needed for public profiles, but kept for UI compatibility)
+  // Connect (mantido para compatibilidade de UI)
   const connect = useCallback(async () => {
     setIsConnected(true);
   }, []);
 
   const disconnect = useCallback(() => {
-    setIsConnected(true); // Keep connected state
+    setIsConnected(true);
     setVideos([]);
     setSelectedIds([]);
   }, []);
 
-  // Load videos from API
-  const loadVideos = useCallback(async (username: string) => {
-    setIsLoadingVideos(true);
-    setVideos([]);
-    setSelectedIds([]);
-
-    try {
-      toast.info(`Carregando vídeos de @${username}...`, { duration: 3000 });
-
-      let response;
-      if (platform === 'tiktok') {
-        response = await analyserApi.getTikTokUserFeed(username);
-      } else {
-        response = await analyserApi.getInstagramUserFeed(username);
-      }
-
-      if (!response.success) {
-        throw new Error(response.error || 'Erro ao carregar vídeos');
-      }
-
-      const loadedVideos = response.data?.videos || [];
-      setVideos(loadedVideos);
-
-      if (loadedVideos.length === 0) {
-        toast.warning('Nenhum vídeo encontrado neste perfil.');
-      } else {
-        toast.success(`${loadedVideos.length} vídeos carregados com sucesso!`);
-      }
-    } catch (error) {
-      console.error('Load videos error:', error);
-      const message = error instanceof Error ? error.message : 'Erro ao carregar vídeos';
-      toast.error(message);
-    } finally {
-      setIsLoadingVideos(false);
-    }
-  }, [platform]);
+  // Load videos from API (compliant mode: disabled unless official integrations are configured)
+  const loadVideos = useCallback(async (_username: string) => {
+    setIsLoadingVideos(false);
+    toast.error(
+      'Carregamento direto de perfis não está disponível neste app (requer integração oficial e permissões). Use o Modo Upload para carregar seus próprios vídeos.',
+      { duration: 6000 }
+    );
+  }, []);
 
   // Load uploaded videos (fallback mode)
   const loadUploadedVideos = useCallback((uploadedVideos: AnalyserVideo[]) => {
@@ -209,17 +180,8 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
             const buffer = await video.localFile.arrayBuffer();
             zip.file(filename, buffer);
             successCount++;
-          } else if (video.videoUrl) {
-            // Download via API proxy
-            const blob = await analyserApi.downloadVideo(video.videoUrl);
-            if (blob) {
-              zip.file(filename, blob);
-              successCount++;
-            } else {
-              console.warn(`Failed to download ${video.id}`);
-              failCount++;
-            }
           } else {
+            // Downloads via URL são desabilitados por conformidade; use Modo Upload.
             failCount++;
           }
         } catch (err) {
@@ -238,7 +200,7 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
       }
 
       if (successCount === 0) {
-        toast.error('Nenhum vídeo foi baixado. Verifique se os links são válidos.');
+        toast.error('Nenhum vídeo foi adicionado ao ZIP. Para baixar, use o Modo Upload e envie seus próprios arquivos.');
         return;
       }
 

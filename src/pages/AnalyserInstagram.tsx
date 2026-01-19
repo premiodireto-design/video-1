@@ -10,7 +10,7 @@ import { UploadFallback } from '@/components/analyser/UploadFallback';
 import { useAnalyserStore } from '@/hooks/useAnalyserStore';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
-import { Info, AlertTriangle } from 'lucide-react';
+import { Info } from 'lucide-react';
 
 export default function AnalyserInstagram() {
   const [activeTab, setActiveTab] = useState<'api' | 'upload'>('api');
@@ -23,33 +23,18 @@ export default function AnalyserInstagram() {
         <AnalyserHeader 
           platform="instagram"
           title="Analyser Instagram"
-          subtitle="Analise perfis públicos, ordene Reels por métricas e baixe vídeos"
+          subtitle="Organize seus vídeos (conteúdo próprio), filtre por métricas e exporte relatórios"
         />
 
-        <Card className="border-purple-500/20 bg-purple-500/5">
+        <Card className="border-border bg-card">
           <CardContent className="pt-4">
             <div className="flex gap-3 items-start">
-              <Info className="h-5 w-5 text-purple-500 mt-0.5 shrink-0" />
+              <Info className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
               <div className="text-sm">
-                <p className="font-medium text-purple-700 dark:text-purple-300">Como funciona:</p>
+                <p className="font-medium">Como usar (conforme as regras das plataformas):</p>
                 <p className="text-muted-foreground">
-                  Digite o @ de qualquer perfil público do Instagram. O sistema irá carregar os Reels/vídeos 
-                  com métricas e você poderá ordenar, filtrar e baixar.
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-amber-500/20 bg-amber-500/5">
-          <CardContent className="pt-4">
-            <div className="flex gap-3 items-start">
-              <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5 shrink-0" />
-              <div className="text-sm">
-                <p className="font-medium text-amber-700 dark:text-amber-300">Limitação do Instagram:</p>
-                <p className="text-muted-foreground">
-                  O Instagram tem proteções mais rígidas que o TikTok. Se a busca por perfil não funcionar, 
-                  use o "Modo Upload" para carregar seus próprios vídeos exportados.
+                  Para ordenar/filtrar e gerar ZIP, use o <strong>Modo Upload</strong> e envie seus próprios vídeos.
+                  Coleta automática de perfis públicos pode falhar por limitações e termos de uso.
                 </p>
               </div>
             </div>
