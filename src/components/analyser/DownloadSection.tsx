@@ -7,7 +7,7 @@ import {
   Package, 
   X, 
   Loader2,
-  AlertCircle
+  Sparkles
 } from 'lucide-react';
 import {
   Dialog,
@@ -16,7 +16,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import type { DownloadProgress } from '@/types/analyser';
 
 interface DownloadSectionProps {
@@ -42,8 +41,6 @@ export function DownloadSection({
   isDownloading,
   onCancelDownload
 }: DownloadSectionProps) {
-  const canDownload = selectedCount > 0 || totalCount > 0;
-
   return (
     <>
       <Card>
@@ -54,13 +51,12 @@ export function DownloadSection({
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Alert>
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              Download de vídeos só está disponível para conteúdo que você possui ou que a plataforma permite explicitamente. 
-              Para vídeos de terceiros, use a opção de exportação da própria plataforma.
-            </AlertDescription>
-          </Alert>
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-gradient-to-r from-green-500/10 to-emerald-500/10 border border-green-500/20">
+            <Sparkles className="h-5 w-5 text-green-500" />
+            <p className="text-sm text-green-700 dark:text-green-300">
+              <strong>Download sem marca d'água!</strong> Os vídeos serão baixados em alta qualidade, sem watermark.
+            </p>
+          </div>
 
           <div className="flex flex-wrap gap-3">
             <Button 
@@ -99,8 +95,8 @@ export function DownloadSection({
           </div>
 
           <div className="text-xs text-muted-foreground">
-            <p><strong>Formato do arquivo:</strong> 0001-[likes]-[views]-[data]-[id].mp4</p>
-            <p>Os arquivos serão ordenados conforme a ordem atual da lista.</p>
+            <p><strong>Formato do arquivo:</strong> [posição]-[likes]-[views]-[data]-[id].mp4</p>
+            <p>Os arquivos serão ordenados conforme a ordem atual da lista (após filtros e ordenação).</p>
           </div>
         </CardContent>
       </Card>
@@ -109,9 +105,9 @@ export function DownloadSection({
       <Dialog open={isDownloading} onOpenChange={() => {}}>
         <DialogContent className="sm:max-w-md" onInteractOutside={(e) => e.preventDefault()}>
           <DialogHeader>
-            <DialogTitle>Preparando Download</DialogTitle>
+            <DialogTitle>Baixando Vídeos</DialogTitle>
             <DialogDescription>
-              Aguarde enquanto preparamos seus arquivos...
+              Aguarde enquanto baixamos os vídeos sem marca d'água...
             </DialogDescription>
           </DialogHeader>
 

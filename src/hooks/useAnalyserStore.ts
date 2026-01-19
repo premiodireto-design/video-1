@@ -1,6 +1,7 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import JSZip from 'jszip';
+import { analyserApi } from '@/lib/api/analyser';
 import type { 
   AnalyserVideo, 
   VideoFilters, 
@@ -19,7 +20,7 @@ const initialFilters: VideoFilters = {
 };
 
 export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
-  const [isConnected, setIsConnected] = useState(false);
+  const [isConnected, setIsConnected] = useState(true); // No auth needed for public profiles
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [isLoadingVideos, setIsLoadingVideos] = useState(false);
   const [videos, setVideos] = useState<AnalyserVideo[]>([]);
@@ -29,7 +30,7 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [cancelRequested, setCancelRequested] = useState(false);
+  const cancelRef = useRef(false);
 
   // Filter and sort videos
   const filteredVideos = useMemo(() => {
@@ -94,49 +95,55 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
   const totalComments = useMemo(() => 
     filteredVideos.reduce((sum, v) => sum + v.comments, 0), [filteredVideos]);
 
-  // Auth methods
+  // Connect (not needed for public profiles, but kept for UI compatibility)
   const connect = useCallback(async () => {
-    setIsAuthLoading(true);
-    try {
-      // TODO: Implement actual OAuth flow with backend
-      // This is a placeholder - real implementation requires API credentials
-      toast.info(
-        platform === 'tiktok' 
-          ? 'A API do TikTok requer aprovação prévia. Use o Modo Upload por enquanto.'
-          : 'Configure as credenciais da API do Instagram nas configurações.',
-        { duration: 5000 }
-      );
-      // For demo, simulate connection
-      // setIsConnected(true);
-    } catch (error) {
-      toast.error('Erro ao conectar. Tente novamente.');
-    } finally {
-      setIsAuthLoading(false);
-    }
-  }, [platform]);
+    setIsConnected(true);
+  }, []);
 
   const disconnect = useCallback(() => {
-    setIsConnected(false);
+    setIsConnected(true); // Keep connected state
     setVideos([]);
     setSelectedIds([]);
-    toast.success('Conta desconectada');
   }, []);
 
   // Load videos from API
   const loadVideos = useCallback(async (username: string) => {
     setIsLoadingVideos(true);
+    setVideos([]);
+    setSelectedIds([]);
+
     try {
-      // TODO: Implement actual API call
-      // This requires backend edge function with proper API credentials
-      toast.info('Funcionalidade requer configuração da API. Use o Modo Upload.');
+      toast.info(`Carregando vídeos de @${username}...`, { duration: 3000 });
+
+      let response;
+      if (platform === 'tiktok') {
+        response = await analyserApi.getTikTokUserFeed(username);
+      } else {
+        response = await analyserApi.getInstagramUserFeed(username);
+      }
+
+      if (!response.success) {
+        throw new Error(response.error || 'Erro ao carregar vídeos');
+      }
+
+      const loadedVideos = response.data?.videos || [];
+      setVideos(loadedVideos);
+
+      if (loadedVideos.length === 0) {
+        toast.warning('Nenhum vídeo encontrado neste perfil.');
+      } else {
+        toast.success(`${loadedVideos.length} vídeos carregados com sucesso!`);
+      }
     } catch (error) {
-      toast.error('Erro ao carregar vídeos');
+      console.error('Load videos error:', error);
+      const message = error instanceof Error ? error.message : 'Erro ao carregar vídeos';
+      toast.error(message);
     } finally {
       setIsLoadingVideos(false);
     }
-  }, []);
+  }, [platform]);
 
-  // Load uploaded videos
+  // Load uploaded videos (fallback mode)
   const loadUploadedVideos = useCallback((uploadedVideos: AnalyserVideo[]) => {
     setVideos(uploadedVideos);
     setSelectedIds([]);
@@ -149,16 +156,18 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
     setSortOrder(newSortOrder);
   }, []);
 
-  // Download methods
+  // Download selected videos
   const downloadSelected = useCallback(async () => {
     const selectedVideos = filteredVideos.filter(v => selectedIds.includes(v.id));
     await downloadVideos(selectedVideos);
   }, [filteredVideos, selectedIds]);
 
+  // Download all filtered videos
   const downloadAll = useCallback(async () => {
     await downloadVideos(filteredVideos);
   }, [filteredVideos]);
 
+  // Main download function
   const downloadVideos = async (videosToDownload: AnalyserVideo[]) => {
     if (videosToDownload.length === 0) {
       toast.error('Nenhum vídeo para baixar');
@@ -166,14 +175,16 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
     }
 
     setIsDownloading(true);
-    setCancelRequested(false);
+    cancelRef.current = false;
 
     const zip = new JSZip();
     const total = videosToDownload.length;
+    let successCount = 0;
+    let failCount = 0;
 
     try {
       for (let i = 0; i < total; i++) {
-        if (cancelRequested) {
+        if (cancelRef.current) {
           toast.info('Download cancelado');
           break;
         }
@@ -187,51 +198,83 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
           remainingItems: total - i - 1,
         });
 
-        // Format filename
+        // Format filename with order, metrics, and date
         const index = String(i + 1).padStart(4, '0');
         const date = video.publishedAt.split('T')[0].replace(/-/g, '');
         const filename = `${index}-${video.likes}-${video.views}-${date}-${video.id}.mp4`;
 
-        if (video.localFile) {
-          // Use local file directly
-          const buffer = await video.localFile.arrayBuffer();
-          zip.file(filename, buffer);
-        } else if (video.downloadable && video.videoUrl) {
-          // Fetch from URL (only for owned content)
-          try {
-            const response = await fetch(video.videoUrl);
-            if (response.ok) {
-              const blob = await response.blob();
+        try {
+          if (video.localFile) {
+            // Use local file directly
+            const buffer = await video.localFile.arrayBuffer();
+            zip.file(filename, buffer);
+            successCount++;
+          } else if (video.videoUrl) {
+            // Download via API proxy
+            const blob = await analyserApi.downloadVideo(video.videoUrl);
+            if (blob) {
               zip.file(filename, blob);
+              successCount++;
+            } else {
+              console.warn(`Failed to download ${video.id}`);
+              failCount++;
             }
-          } catch {
-            console.warn(`Could not download ${video.id}`);
+          } else {
+            failCount++;
           }
+        } catch (err) {
+          console.warn(`Error downloading ${video.id}:`, err);
+          failCount++;
+        }
+
+        // Small delay between downloads to avoid rate limiting
+        if (i < total - 1 && !cancelRef.current) {
+          await new Promise(r => setTimeout(r, 200));
         }
       }
 
+      if (cancelRef.current) {
+        return;
+      }
+
+      if (successCount === 0) {
+        toast.error('Nenhum vídeo foi baixado. Verifique se os links são válidos.');
+        return;
+      }
+
       // Generate and download zip
-      const content = await zip.generateAsync({ type: 'blob' });
+      toast.info('Gerando arquivo ZIP...');
+      const content = await zip.generateAsync({ 
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 },
+      });
+
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
       a.download = `${platform}-videos-${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      toast.success('Download concluído!');
+      if (failCount > 0) {
+        toast.warning(`Download concluído! ${successCount} de ${total} vídeos baixados.`);
+      } else {
+        toast.success('Download concluído!');
+      }
     } catch (error) {
       console.error('Download error:', error);
       toast.error('Erro ao criar arquivo zip');
     } finally {
       setIsDownloading(false);
       setDownloadProgress(null);
-      setCancelRequested(false);
     }
   };
 
   const cancelDownload = useCallback(() => {
-    setCancelRequested(true);
+    cancelRef.current = true;
   }, []);
 
   // Export CSV
@@ -241,13 +284,14 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
       return;
     }
 
-    const headers = ['platform', 'id', 'url', 'date', 'caption', 'views', 'likes', 'comments', 'shares', 'saves'];
-    const rows = filteredVideos.map(v => [
+    const headers = ['posicao', 'platform', 'id', 'url', 'date', 'caption', 'views', 'likes', 'comments', 'shares', 'saves'];
+    const rows = filteredVideos.map((v, idx) => [
+      idx + 1,
       v.platform,
       v.id,
       v.permalink,
       v.publishedAt,
-      `"${(v.caption || '').replace(/"/g, '""')}"`,
+      `"${(v.caption || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
       v.views,
       v.likes,
       v.comments,
@@ -255,13 +299,15 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
       v.saves || 0,
     ].join(','));
 
-    const csv = [headers.join(','), ...rows].join('\n');
+    const csv = '\ufeff' + [headers.join(','), ...rows].join('\n'); // BOM for Excel
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${platform}-videos-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
     toast.success('CSV exportado!');
