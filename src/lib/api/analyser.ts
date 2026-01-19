@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import type { AnalyserVideo } from '@/types/analyser';
+import { getCookie } from '@/components/analyser/CookieInput';
 
 interface ApiResponse<T = unknown> {
   success: boolean;
@@ -18,8 +19,11 @@ interface UserFeedData {
 export const analyserApi = {
   async getInstagramUserFeed(username: string, limit: number = 50): Promise<ApiResponse<UserFeedData>> {
     try {
+      // Get cookie from localStorage
+      const cookie = getCookie('instagram');
+      
       const { data, error } = await supabase.functions.invoke('instagram-feed', {
-        body: { username, limit },
+        body: { username, limit, cookie },
       });
       
       if (error) {

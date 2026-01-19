@@ -1,6 +1,8 @@
+import { useState, useCallback } from 'react';
 import { Header } from '@/components/layout/Header';
 import { AnalyserHeader } from '@/components/analyser/AnalyserHeader';
 import { ProfileInput } from '@/components/analyser/ProfileInput';
+import { CookieInput } from '@/components/analyser/CookieInput';
 import { KPICards } from '@/components/analyser/KPICards';
 import { FiltersSection } from '@/components/analyser/FiltersSection';
 import { VideoList } from '@/components/analyser/VideoList';
@@ -9,6 +11,11 @@ import { useAnalyserStore } from '@/hooks/useAnalyserStore';
 
 export default function AnalyserInstagram() {
   const store = useAnalyserStore('instagram');
+  const [hasCookie, setHasCookie] = useState(false);
+
+  const handleCookieChange = useCallback((hasIt: boolean) => {
+    setHasCookie(hasIt);
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">
@@ -20,13 +27,20 @@ export default function AnalyserInstagram() {
           subtitle="Carregue perfis públicos, filtre por métricas e exporte vídeos"
         />
 
-        <ProfileInput 
+        <CookieInput 
           platform="instagram"
-          onLoadVideos={store.loadVideos}
-          isLoading={store.isLoadingVideos}
-          loadedUsername={store.loadedUsername}
-          onClear={store.clearVideos}
+          onCookieChange={handleCookieChange}
         />
+
+        {hasCookie && (
+          <ProfileInput 
+            platform="instagram"
+            onLoadVideos={store.loadVideos}
+            isLoading={store.isLoadingVideos}
+            loadedUsername={store.loadedUsername}
+            onClear={store.clearVideos}
+          />
+        )}
 
         {store.videos.length > 0 && (
           <>
@@ -66,7 +80,7 @@ export default function AnalyserInstagram() {
           </>
         )}
 
-        {store.videos.length === 0 && !store.isLoadingVideos && (
+        {store.videos.length === 0 && !store.isLoadingVideos && hasCookie && (
           <div className="text-center py-12 text-muted-foreground">
             <p>Digite um @ ou URL de perfil acima para carregar os vídeos.</p>
             <p className="text-sm mt-2">Funciona apenas com perfis públicos.</p>
