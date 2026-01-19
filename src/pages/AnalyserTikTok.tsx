@@ -23,18 +23,18 @@ export default function AnalyserTikTok() {
         <AnalyserHeader 
           platform="tiktok"
           title="Analyser TikTok"
-          subtitle="Analise qualquer perfil público, ordene por métricas e baixe vídeos sem marca d'água"
+          subtitle="Organize seus vídeos (conteúdo próprio), filtre por métricas e exporte relatórios"
         />
 
-        <Card className="border-blue-500/20 bg-blue-500/5">
+        <Card className="border-border bg-card">
           <CardContent className="pt-4">
             <div className="flex gap-3 items-start">
-              <Info className="h-5 w-5 text-blue-500 mt-0.5 shrink-0" />
+              <Info className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
               <div className="text-sm">
-                <p className="font-medium text-blue-700 dark:text-blue-300">Como funciona:</p>
+                <p className="font-medium">Como usar (conforme as regras das plataformas):</p>
                 <p className="text-muted-foreground">
-                  Digite o @ de qualquer perfil público do TikTok. O sistema irá carregar todos os vídeos 
-                  com métricas (views, likes, comentários) e você poderá ordenar, filtrar e baixar sem marca d'água.
+                  Para ordenar/filtrar e gerar ZIP, use o <strong>Modo Upload</strong> e envie seus próprios vídeos.
+                  Acesso automático a perfis públicos e download de terceiros não é suportado por limitações/termos de uso.
                 </p>
               </div>
             </div>

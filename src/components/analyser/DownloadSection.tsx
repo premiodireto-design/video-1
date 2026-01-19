@@ -7,7 +7,7 @@ import {
   Package, 
   X, 
   Loader2,
-  Sparkles
+  Info
 } from 'lucide-react';
 import {
   Dialog,
@@ -51,10 +51,11 @@ export function DownloadSection({
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-gradient-to-r from-green-500/10 to-emerald-500/10 border border-green-500/20">
-            <Sparkles className="h-5 w-5 text-green-500" />
-            <p className="text-sm text-green-700 dark:text-green-300">
-              <strong>Download sem marca d'água!</strong> Os vídeos serão baixados em alta qualidade, sem watermark.
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/40 border border-border">
+            <Info className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
+            <p className="text-sm text-muted-foreground">
+              Downloads são habilitados <strong>apenas</strong> para arquivos que você enviou no <strong>Modo Upload</strong> (conteúdo próprio). 
+              Para conteúdo de terceiros, use as opções oficiais de exportação das plataformas.
             </p>
           </div>
 
@@ -107,7 +108,7 @@ export function DownloadSection({
           <DialogHeader>
             <DialogTitle>Baixando Vídeos</DialogTitle>
             <DialogDescription>
-              Aguarde enquanto baixamos os vídeos sem marca d'água...
+              Aguarde enquanto preparamos o arquivo ZIP...
             </DialogDescription>
           </DialogHeader>
 
