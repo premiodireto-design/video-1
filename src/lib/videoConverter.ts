@@ -20,11 +20,13 @@ export async function loadFFmpegConverter(): Promise<FFmpeg> {
     });
 
     // Single-threaded core (no SharedArrayBuffer needed)
-    const baseURL = 'https://unpkg.com/@ffmpeg/core-st@0.12.6/dist/esm';
+    // We serve the JS core from our own origin (bundled) and fetch the WASM from a CDN.
+    const coreBaseURL = `${window.location.origin}/ffmpeg`;
+    const wasmCDN = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
 
     await ff.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      coreURL: await toBlobURL(`${coreBaseURL}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${wasmCDN}/ffmpeg-core.wasm`, 'application/wasm'),
     });
 
     ffmpeg = ff;
