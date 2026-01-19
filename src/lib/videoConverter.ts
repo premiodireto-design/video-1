@@ -119,31 +119,33 @@ export async function convertWebMToMP4(
     try { await ff.deleteFile(inputName); } catch {}
     try { await ff.deleteFile(outputName); } catch {}
 
+    console.log('[FFmpeg Converter] Writing input file...');
     await ff.writeFile(inputName, await fetchFile(webmBlob));
+    console.log('[FFmpeg Converter] Input file written, size:', webmBlob.size);
 
     if (progressHandler) {
       ff.on('progress', progressHandler);
     }
 
+    console.log('[FFmpeg Converter] Starting conversion...');
     // Convert to MP4 (H.264 + AAC) - ULTRAFAST mode
-    await ff.exec(
-      [
-        '-i', inputName,
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-crf', '23',
-        '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-movflags', '+faststart',
-        '-y',
-        outputName,
-      ],
-      timeoutMs,
-      { signal: internalAbort.signal }
-    );
+    const execResult = await ff.exec([
+      '-i', inputName,
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '23',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-movflags', '+faststart',
+      '-y',
+      outputName,
+    ]);
+    
+    console.log('[FFmpeg Converter] Exec result:', execResult);
 
     const data = await ff.readFile(outputName);
+    console.log('[FFmpeg Converter] Output file read, size:', data instanceof Uint8Array ? data.length : 'string');
 
     const bytes = data instanceof Uint8Array
       ? new Uint8Array(data)
