@@ -1,4 +1,5 @@
 import type { GreenArea } from './greenDetection';
+import { captureVideoFrame, analyzeVideoFrame, calculateSmartPosition, getDefaultAnalysis, type FrameAnalysis } from './frameAnalyzer';
 
 export interface ProcessingSettings {
   fitMode: 'cover' | 'contain';
@@ -6,6 +7,7 @@ export interface ProcessingSettings {
   maxQuality: boolean;
   removeBlackBars: boolean;
   watermark?: string; // Optional @ handle for watermark
+  useAiFraming?: boolean; // Use AI to detect faces and position video
 }
 
 export interface ProcessingProgress {
@@ -123,8 +125,45 @@ export async function processVideo(
   let scale: number;
   let offsetX: number;
   let offsetY: number;
+  let frameAnalysis: FrameAnalysis | null = null;
   
-  if (settings.fitMode === 'cover') {
+  // Use AI framing if enabled
+  if (settings.useAiFraming && settings.fitMode === 'cover') {
+    onProgress({
+      videoId,
+      progress: 12,
+      stage: 'processing',
+      message: 'Analisando vídeo com IA...',
+    });
+    
+    try {
+      // Capture first frame for analysis
+      const frameBase64 = await captureVideoFrame(video);
+      frameAnalysis = await analyzeVideoFrame(frameBase64);
+      console.log('[VideoProcessor] AI frame analysis:', frameAnalysis);
+      
+      // Calculate smart positioning based on AI analysis
+      const smartPos = calculateSmartPosition(vw, vh, ww, wh, frameAnalysis);
+      scale = smartPos.scale;
+      offsetX = smartPos.offsetX;
+      offsetY = smartPos.offsetY;
+      
+      onProgress({
+        videoId,
+        progress: 15,
+        stage: 'processing',
+        message: frameAnalysis.hasFace ? 'Rosto detectado! Posicionando...' : 'Conteúdo analisado! Posicionando...',
+      });
+    } catch (aiError) {
+      console.warn('[VideoProcessor] AI analysis failed, using default:', aiError);
+      // Fallback to default cover mode
+      scale = Math.max(ww / vw, wh / vh);
+      const scaledW = vw * scale;
+      const scaledH = vh * scale;
+      offsetX = (ww - scaledW) / 2;
+      offsetY = 0; // Top-aligned
+    }
+  } else if (settings.fitMode === 'cover') {
     scale = Math.max(ww / vw, wh / vh);
     const scaledW = vw * scale;
     const scaledH = vh * scale;
@@ -140,6 +179,7 @@ export async function processVideo(
 
   const scaledW = vw * scale;
   const scaledH = vh * scale;
+
 
   // Create template mask (green area transparent)
   const maskCanvas = document.createElement('canvas');

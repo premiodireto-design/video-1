@@ -24,6 +24,7 @@ export default function Dashboard() {
     maxQuality: false,
     removeBlackBars: false,
     watermark: '',
+    useAiFraming: true, // Enabled by default
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
