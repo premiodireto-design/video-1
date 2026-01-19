@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import JSZip from 'jszip';
 import { Header } from '@/components/layout/Header';
 import { TemplateUpload } from '@/components/template/TemplateUpload';
@@ -6,10 +6,10 @@ import { VideoUpload, type VideoFile } from '@/components/video/VideoUpload';
 import { ProcessingSettings } from '@/components/settings/ProcessingSettings';
 import { ProcessingControls } from '@/components/processing/ProcessingControls';
 import { useToast } from '@/hooks/use-toast';
-import { 
-  processVideo, 
+import {
+  processVideo,
   type ProcessingSettings as ProcessingSettingsType,
-  type ProcessingProgress 
+  type ProcessingProgress
 } from '@/lib/videoProcessor';
 import { convertWebMToMP4, loadFFmpegConverter } from '@/lib/videoConverter';
 import { type GreenArea } from '@/lib/greenDetection';
@@ -26,6 +26,7 @@ export default function Dashboard() {
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
+  const conversionAbortRef = useRef<AbortController | null>(null);
   const [conversionProgress, setConversionProgress] = useState({ current: 0, total: 0, filename: '' });
   const { toast } = useToast();
 
@@ -131,19 +132,35 @@ export default function Dashboard() {
     }
   }, [videos, processVideos]);
 
+  const handleCancelConversion = useCallback(() => {
+    conversionAbortRef.current?.abort();
+    conversionAbortRef.current = null;
+    setIsConverting(false);
+    setConversionProgress({ current: 0, total: 0, filename: '' });
+
+    toast({
+      title: 'Conversão cancelada',
+      description: 'Você pode tentar baixar novamente.',
+    });
+  }, [toast]);
+
   const handleDownloadSingle = useCallback(async (videoId: string) => {
     const video = videos.find(v => v.id === videoId);
     if (!video?.outputBlob) return;
 
     setIsConverting(true);
+    conversionAbortRef.current = new AbortController();
+
     toast({
       title: 'Convertendo para MP4...',
       description: 'Aguarde enquanto convertemos o vídeo',
     });
 
     try {
-      const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name);
-      
+      const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
+        signal: conversionAbortRef.current.signal,
+      });
+
       const url = URL.createObjectURL(mp4Blob);
       const a = document.createElement('a');
       a.href = url;
@@ -152,19 +169,22 @@ export default function Dashboard() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      
+
       toast({
         title: 'Download concluído!',
         description: 'Vídeo convertido para MP4 com sucesso',
       });
     } catch (error) {
+      const isAbort = error instanceof DOMException && error.name === 'AbortError';
+      if (isAbort) return; // cancel already toasted
+
       console.error('Conversion error:', error);
       toast({
         variant: 'destructive',
         title: 'Erro na conversão',
         description: 'Não foi possível converter para MP4. Baixando como WebM.',
       });
-      
+
       // Fallback to WebM download
       const url = URL.createObjectURL(video.outputBlob);
       const a = document.createElement('a');
@@ -175,6 +195,7 @@ export default function Dashboard() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } finally {
+      conversionAbortRef.current = null;
       setIsConverting(false);
     }
   }, [videos, toast]);
@@ -184,7 +205,8 @@ export default function Dashboard() {
     if (completedVideos.length === 0) return;
 
     setIsConverting(true);
-    
+    conversionAbortRef.current = new AbortController();
+
     toast({
       title: 'Carregando conversor...',
       description: 'Preparando para converter vídeos para MP4',
@@ -193,29 +215,34 @@ export default function Dashboard() {
     try {
       // Pre-load FFmpeg converter
       await loadFFmpegConverter();
-      
+
       const zip = new JSZip();
-      
+
       for (let i = 0; i < completedVideos.length; i++) {
         const video = completedVideos[i];
         if (!video.outputBlob) continue;
-        
+
         setConversionProgress({
           current: i + 1,
           total: completedVideos.length,
           filename: video.name,
         });
-        
+
         toast({
           title: `Convertendo ${i + 1} de ${completedVideos.length}`,
           description: video.name,
         });
-        
+
         try {
-          const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name);
+          const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
+            signal: conversionAbortRef.current?.signal,
+          });
           const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(i + 1).padStart(3, '0')}.mp4`;
           zip.file(filename, mp4Blob);
         } catch (err) {
+          const isAbort = err instanceof DOMException && err.name === 'AbortError';
+          if (isAbort) throw err;
+
           console.error('Error converting video:', video.name, err);
           // Add as WebM if conversion fails
           const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(i + 1).padStart(3, '0')}.webm`;
@@ -243,6 +270,9 @@ export default function Dashboard() {
         description: `${completedVideos.length} vídeo(s) em MP4 incluído(s) no ZIP`,
       });
     } catch (error) {
+      const isAbort = error instanceof DOMException && error.name === 'AbortError';
+      if (isAbort) return;
+
       console.error('Conversion error:', error);
       toast({
         variant: 'destructive',
@@ -250,6 +280,7 @@ export default function Dashboard() {
         description: 'Ocorreu um erro ao converter os vídeos',
       });
     } finally {
+      conversionAbortRef.current = null;
       setIsConverting(false);
       setConversionProgress({ current: 0, total: 0, filename: '' });
     }
@@ -306,6 +337,7 @@ export default function Dashboard() {
             onProcessAll={handleProcessAll}
             onDownloadAll={handleDownloadAll}
             onDownloadSingle={handleDownloadSingle}
+            onCancelConversion={handleCancelConversion}
           />
         </div>
       </main>

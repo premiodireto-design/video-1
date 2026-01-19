@@ -65,66 +65,94 @@ export async function loadFFmpegConverter(): Promise<FFmpeg> {
 export async function convertWebMToMP4(
   webmBlob: Blob,
   filename: string,
-  onProgress?: (progress: number) => void
+  options?: {
+    onProgress?: (progress: number) => void;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  }
 ): Promise<Blob> {
   const ff = await loadFFmpegConverter();
 
   const inputName = 'input.webm';
   const outputName = 'output.mp4';
 
-  // Always clean old files if they exist (best-effort)
-  try { await ff.deleteFile(inputName); } catch {}
-  try { await ff.deleteFile(outputName); } catch {}
+  const progressHandler = options?.onProgress
+    ? ({ progress }: { progress: number }) => {
+        options.onProgress?.(Math.round(progress * 100));
+      }
+    : null;
 
-  await ff.writeFile(inputName, await fetchFile(webmBlob));
+  try {
+    // Always clean old files if they exist (best-effort)
+    try { await ff.deleteFile(inputName); } catch {}
+    try { await ff.deleteFile(outputName); } catch {}
 
-  // Set up progress tracking
-  if (onProgress) {
-    ff.on('progress', ({ progress }) => {
-      onProgress(Math.round(progress * 100));
-    });
+    await ff.writeFile(inputName, await fetchFile(webmBlob));
+
+    if (progressHandler) {
+      ff.on('progress', progressHandler);
+    }
+
+    const timeoutMs = options?.timeoutMs ?? 3 * 60 * 1000; // 3 min
+
+    // Convert to MP4 (H.264 + AAC)
+    await ff.exec(
+      [
+        '-i', inputName,
+        '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black',
+        '-r', '30',
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '18',
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-movflags', '+faststart',
+        '-y',
+        outputName,
+      ],
+      timeoutMs,
+      options?.signal ? { signal: options.signal } : undefined
+    );
+
+    const data = await ff.readFile(outputName);
+
+    // Convert to Blob - create a new Uint8Array to avoid SharedArrayBuffer issues
+    const bytes = data instanceof Uint8Array
+      ? new Uint8Array(data)
+      : new TextEncoder().encode(data as string);
+
+    // Sanity check: MP4 files usually contain the string "ftyp" at offset 4
+    const isMp4 = bytes.length > 12 &&
+      bytes[4] === 0x66 && // f
+      bytes[5] === 0x74 && // t
+      bytes[6] === 0x79 && // y
+      bytes[7] === 0x70;   // p
+
+    if (!isMp4) {
+      throw new Error('Conversão falhou: saída não parece MP4.');
+    }
+
+    return new Blob([bytes], { type: 'video/mp4' });
+  } catch (err) {
+    // If cancelled/timeout, kill the worker so the UI doesn't get stuck forever.
+    try {
+      if (ff) ff.terminate();
+    } catch {}
+    ffmpeg = null;
+
+    throw err;
+  } finally {
+    if (progressHandler) {
+      try {
+        ff.off('progress', progressHandler);
+      } catch {}
+    }
+
+    // Cleanup (best-effort)
+    try { await ff.deleteFile(inputName); } catch {}
+    try { await ff.deleteFile(outputName); } catch {}
   }
-
-  // Convert to MP4 (H.264 + AAC) in FULL HD (1080x1920) at 30fps.
-  // Note: audio might be missing if the input webm has no audio track.
-  await ff.exec([
-    '-i', inputName,
-    '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black',
-    '-r', '30',
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '18',
-    '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac',
-    '-b:a', '192k',
-    '-movflags', '+faststart',
-    '-y',
-    outputName,
-  ]);
-
-  const data = await ff.readFile(outputName);
-
-  // Cleanup
-  await ff.deleteFile(inputName);
-  await ff.deleteFile(outputName);
-
-  // Convert to Blob - create a new Uint8Array to avoid SharedArrayBuffer issues
-  const bytes = data instanceof Uint8Array
-    ? new Uint8Array(data)
-    : new TextEncoder().encode(data as string);
-
-  // Sanity check: MP4 files usually contain the string "ftyp" at offset 4
-  const isMp4 = bytes.length > 12 &&
-    bytes[4] === 0x66 && // f
-    bytes[5] === 0x74 && // t
-    bytes[6] === 0x79 && // y
-    bytes[7] === 0x70;   // p
-
-  if (!isMp4) {
-    throw new Error('Conversão falhou: saída não parece MP4.');
-  }
-
-  return new Blob([bytes], { type: 'video/mp4' });
 }
 
 /**
@@ -132,21 +160,25 @@ export async function convertWebMToMP4(
  */
 export async function convertMultipleToMP4(
   files: { blob: Blob; filename: string }[],
-  onProgress?: (current: number, total: number, filename: string) => void
+  onProgress?: (current: number, total: number, filename: string) => void,
+  options?: { signal?: AbortSignal; timeoutMs?: number }
 ): Promise<{ blob: Blob; filename: string }[]> {
   const results: { blob: Blob; filename: string }[] = [];
-  
+
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     if (onProgress) {
       onProgress(i + 1, files.length, file.filename);
     }
-    
-    const mp4Blob = await convertWebMToMP4(file.blob, file.filename);
+
+    const mp4Blob = await convertWebMToMP4(file.blob, file.filename, {
+      signal: options?.signal,
+      timeoutMs: options?.timeoutMs,
+    });
     const mp4Filename = file.filename.replace(/\.webm$/i, '.mp4');
-    
+
     results.push({ blob: mp4Blob, filename: mp4Filename });
   }
-  
+
   return results;
 }
