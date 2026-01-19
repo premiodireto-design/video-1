@@ -171,48 +171,12 @@ export async function processVideo(
     message: 'Iniciando gravação...',
   });
 
-  // Set up MediaRecorder with audio
+  // Set up MediaRecorder (video from canvas + audio from the source video)
   // Use variable frame-rate capture when possible to reduce A/V drift under load.
   const canvasStream = canvas.captureStream();
 
-  // Try to get audio from the video
-  let combinedStream: MediaStream;
-  let audioContext: AudioContext | null = null;
-  let gainNode: GainNode | null = null;
-  try {
-    // Create audio context to capture audio from video
-    audioContext = new AudioContext({ latencyHint: 'playback' });
-    const source = audioContext.createMediaElementSource(video);
-    const destination = audioContext.createMediaStreamDestination();
-    
-    // Create a gain node to control volume (set to 1 for normal volume)
-    gainNode = audioContext.createGain();
-    gainNode.gain.value = 1;
-    
-    // Connect: source -> gain -> destination (for recording)
-    // Also connect to speakers so audio plays during processing (helps sync)
-    source.connect(gainNode);
-    gainNode.connect(destination);
-    // Don't connect to audioContext.destination to keep it silent during processing
-
-    // Combine video and audio streams
-    const audioTrack = destination.stream.getAudioTracks()[0];
-    console.log('[VideoProcessor] Audio track captured:', !!audioTrack, audioTrack?.label);
-    
-    if (audioTrack) {
-      combinedStream = new MediaStream([
-        ...canvasStream.getVideoTracks(),
-        audioTrack,
-      ]);
-      console.log('[VideoProcessor] Combined stream tracks:', combinedStream.getTracks().map(t => t.kind));
-    } else {
-      console.warn('[VideoProcessor] No audio track found');
-      combinedStream = canvasStream;
-    }
-  } catch (e) {
-    console.warn('[VideoProcessor] Could not capture audio:', e);
-    combinedStream = canvasStream;
-  }
+  // We start with the canvas video track, then (after playback starts) we attach an audio track.
+  const combinedStream = new MediaStream(canvasStream.getVideoTracks());
 
   // Prefer MP4 when supported (fast downloads, no FFmpeg step). Fallback to WebM.
   // Note: MP4 recording support varies by browser.
@@ -226,7 +190,51 @@ export async function processVideo(
     'video/webm',
   ];
 
-  let mimeType = preferredTypes.find((t) => MediaRecorder.isTypeSupported(t)) ?? 'video/webm';
+  const mimeType = preferredTypes.find((t) => MediaRecorder.isTypeSupported(t)) ?? 'video/webm';
+
+  // Audio capture helpers
+  let audioContext: AudioContext | null = null;
+  const attachAudioTrack = async (): Promise<boolean> => {
+    // 1) Best option: captureStream() from the video element (usually most reliable)
+    const anyVideo = video as any;
+    const captureFn = (anyVideo.captureStream || anyVideo.mozCaptureStream)?.bind(video);
+    if (typeof captureFn === 'function') {
+      try {
+        const videoStream: MediaStream = captureFn();
+        const audioTrack = videoStream.getAudioTracks()[0];
+        if (audioTrack) {
+          combinedStream.addTrack(audioTrack);
+          console.log('[VideoProcessor] Audio via video.captureStream():', audioTrack.label);
+          return true;
+        }
+      } catch (e) {
+        console.warn('[VideoProcessor] video.captureStream() failed:', e);
+      }
+    }
+
+    // 2) Fallback: AudioContext -> MediaStreamDestination
+    try {
+      audioContext = new AudioContext({ latencyHint: 'playback' });
+      const source = audioContext.createMediaElementSource(video);
+      const destination = audioContext.createMediaStreamDestination();
+      const gain = audioContext.createGain();
+      gain.gain.value = 0; // silent output
+      source.connect(gain);
+      gain.connect(destination);
+
+      const audioTrack = destination.stream.getAudioTracks()[0];
+      if (audioTrack) {
+        combinedStream.addTrack(audioTrack);
+        console.log('[VideoProcessor] Audio via AudioContext fallback:', audioTrack.label);
+        return true;
+      }
+    } catch (e) {
+      console.warn('[VideoProcessor] AudioContext fallback failed:', e);
+    }
+
+    console.warn('[VideoProcessor] No audio track available');
+    return false;
+  };
 
   const recorder = new MediaRecorder(combinedStream, {
     mimeType,
@@ -242,9 +250,7 @@ export async function processVideo(
     }
   };
 
-  recorder.start(100);
-
-  let animationId: number;
+  let animationId: number = 0;
   let isRecording = true;
   const endTime = duration - trimEnd;
 
@@ -393,6 +399,14 @@ export async function processVideo(
       try {
         await audioContext?.resume();
       } catch {}
+
+      // Attach audio track AFTER playback starts (more reliable across browsers)
+      try {
+        await attachAudioTrack();
+      } catch {}
+
+      // Start recording only after we tried attaching audio
+      recorder.start(100);
       scheduleFrames();
     }).catch((err2) => {
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
