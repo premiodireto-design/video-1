@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
@@ -33,9 +33,104 @@ interface VideoListProps {
   platform: 'tiktok' | 'instagram';
 }
 
+// Memoized thumbnail component for performance
+const VideoThumbnail = memo(({ video, index }: { video: AnalyserVideo; index: number }) => {
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
+
+  return (
+    <div className="relative w-16 h-20 rounded-md overflow-hidden bg-muted flex-shrink-0">
+      {video.thumbnail && !error ? (
+        <>
+          {!loaded && (
+            <div className="absolute inset-0 bg-muted animate-pulse" />
+          )}
+          <img 
+            src={video.thumbnail} 
+            alt=""
+            loading="lazy"
+            decoding="async"
+            onLoad={() => setLoaded(true)}
+            onError={() => setError(true)}
+            className={`w-full h-full object-cover transition-opacity duration-200 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+          />
+        </>
+      ) : (
+        <div className="w-full h-full flex items-center justify-center">
+          <Video className="h-6 w-6 text-muted-foreground" />
+        </div>
+      )}
+      <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-xs px-1 text-center font-medium">
+        #{index + 1}
+      </div>
+    </div>
+  );
+});
+VideoThumbnail.displayName = 'VideoThumbnail';
+
+// Memoized row component
+const VideoRow = memo(({ 
+  video, 
+  index, 
+  isSelected, 
+  onToggle,
+  formatNumber,
+  formatDate
+}: { 
+  video: AnalyserVideo; 
+  index: number;
+  isSelected: boolean;
+  onToggle: () => void;
+  formatNumber: (n: number) => string;
+  formatDate: (d: string) => string;
+}) => (
+  <TableRow className="group">
+    <TableCell className="w-12">
+      <Checkbox 
+        checked={isSelected}
+        onCheckedChange={onToggle}
+      />
+    </TableCell>
+    <TableCell className="w-20">
+      <VideoThumbnail video={video} index={index} />
+    </TableCell>
+    <TableCell>
+      <p className="line-clamp-2 text-sm max-w-xs">
+        {video.caption || <span className="text-muted-foreground italic">Sem legenda</span>}
+      </p>
+    </TableCell>
+    <TableCell className="text-center font-medium tabular-nums">
+      {formatNumber(video.views)}
+    </TableCell>
+    <TableCell className="text-center font-medium tabular-nums">
+      {formatNumber(video.likes)}
+    </TableCell>
+    <TableCell className="text-center font-medium tabular-nums">
+      {formatNumber(video.comments)}
+    </TableCell>
+    <TableCell className="text-center text-sm text-muted-foreground tabular-nums">
+      {formatDate(video.publishedAt)}
+    </TableCell>
+    <TableCell className="w-12">
+      {video.permalink && (
+        <Button 
+          variant="ghost" 
+          size="icon"
+          asChild
+          className="opacity-0 group-hover:opacity-100 transition-opacity"
+        >
+          <a href={video.permalink} target="_blank" rel="noopener noreferrer">
+            <ExternalLink className="h-4 w-4" />
+          </a>
+        </Button>
+      )}
+    </TableCell>
+  </TableRow>
+));
+VideoRow.displayName = 'VideoRow';
+
 export function VideoList({ videos, selectedIds, onSelectionChange, platform }: VideoListProps) {
   const allSelected = videos.length > 0 && selectedIds.length === videos.length;
-  const someSelected = selectedIds.length > 0 && selectedIds.length < videos.length;
 
   const toggleAll = () => {
     if (allSelected) {
@@ -70,7 +165,7 @@ export function VideoList({ videos, selectedIds, onSelectionChange, platform }: 
   return (
     <Card>
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <CardTitle className="text-lg flex items-center gap-2">
             <Video className="h-5 w-5" />
             Vídeos ({videos.length})
@@ -98,7 +193,7 @@ export function VideoList({ videos, selectedIds, onSelectionChange, platform }: 
         </div>
       </CardHeader>
       <CardContent>
-        <ScrollArea className="h-[500px]">
+        <ScrollArea className="h-[600px]">
           <Table>
             <TableHeader>
               <TableRow>
@@ -134,63 +229,15 @@ export function VideoList({ videos, selectedIds, onSelectionChange, platform }: 
             </TableHeader>
             <TableBody>
               {videos.map((video, index) => (
-                <TableRow key={video.id} className="group">
-                  <TableCell>
-                    <Checkbox 
-                      checked={selectedIds.includes(video.id)}
-                      onCheckedChange={() => toggleOne(video.id)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <div className="relative w-16 h-16 rounded-md overflow-hidden bg-muted">
-                      {video.thumbnail ? (
-                        <img 
-                          src={video.thumbnail} 
-                          alt={video.caption || 'Video thumbnail'}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <Video className="h-6 w-6 text-muted-foreground" />
-                        </div>
-                      )}
-                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-xs px-1 text-center">
-                        #{index + 1}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <p className="line-clamp-2 text-sm max-w-xs">
-                      {video.caption || <span className="text-muted-foreground italic">Sem legenda</span>}
-                    </p>
-                  </TableCell>
-                  <TableCell className="text-center font-medium">
-                    {formatNumber(video.views)}
-                  </TableCell>
-                  <TableCell className="text-center font-medium">
-                    {formatNumber(video.likes)}
-                  </TableCell>
-                  <TableCell className="text-center font-medium">
-                    {formatNumber(video.comments)}
-                  </TableCell>
-                  <TableCell className="text-center text-sm text-muted-foreground">
-                    {formatDate(video.publishedAt)}
-                  </TableCell>
-                  <TableCell>
-                    {video.permalink && (
-                      <Button 
-                        variant="ghost" 
-                        size="icon"
-                        asChild
-                        className="opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        <a href={video.permalink} target="_blank" rel="noopener noreferrer">
-                          <ExternalLink className="h-4 w-4" />
-                        </a>
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
+                <VideoRow 
+                  key={video.id}
+                  video={video}
+                  index={index}
+                  isSelected={selectedIds.includes(video.id)}
+                  onToggle={() => toggleOne(video.id)}
+                  formatNumber={formatNumber}
+                  formatDate={formatDate}
+                />
               ))}
             </TableBody>
           </Table>

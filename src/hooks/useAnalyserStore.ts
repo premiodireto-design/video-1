@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import JSZip from 'jszip';
+import { analyserApi } from '@/lib/api/analyser';
 import type { 
   AnalyserVideo, 
   VideoFilters, 
@@ -19,8 +20,6 @@ const initialFilters: VideoFilters = {
 };
 
 export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
-  const [isConnected, setIsConnected] = useState(true); // No auth needed for public profiles
-  const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [isLoadingVideos, setIsLoadingVideos] = useState(false);
   const [videos, setVideos] = useState<AnalyserVideo[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -29,6 +28,8 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [loadedUsername, setLoadedUsername] = useState<string>('');
+  const [hasMore, setHasMore] = useState(false);
   const cancelRef = useRef(false);
 
   // Filter and sort videos
@@ -94,31 +95,45 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
   const totalComments = useMemo(() => 
     filteredVideos.reduce((sum, v) => sum + v.comments, 0), [filteredVideos]);
 
-  // Connect (mantido para compatibilidade de UI)
-  const connect = useCallback(async () => {
-    setIsConnected(true);
-  }, []);
-
-  const disconnect = useCallback(() => {
-    setIsConnected(true);
+  // Load videos from API
+  const loadVideos = useCallback(async (username: string, limit: number = 50) => {
+    setIsLoadingVideos(true);
     setVideos([]);
     setSelectedIds([]);
-  }, []);
+    setLoadedUsername(username);
+    
+    try {
+      let response;
+      
+      if (platform === 'instagram') {
+        response = await analyserApi.getInstagramUserFeed(username, limit);
+      } else {
+        response = await analyserApi.getTikTokUserFeed(username, limit);
+      }
+      
+      if (!response.success || !response.data) {
+        toast.error(response.error || 'Erro ao carregar vídeos');
+        return;
+      }
+      
+      setVideos(response.data.videos);
+      setHasMore(response.data.hasMore || false);
+      toast.success(`${response.data.videos.length} vídeos carregados de @${response.data.username}!`);
+      
+    } catch (err) {
+      console.error('Load videos error:', err);
+      toast.error('Erro ao carregar vídeos');
+    } finally {
+      setIsLoadingVideos(false);
+    }
+  }, [platform]);
 
-  // Load videos from API (compliant mode: disabled unless official integrations are configured)
-  const loadVideos = useCallback(async (_username: string) => {
-    setIsLoadingVideos(false);
-    toast.error(
-      'Carregamento direto de perfis não está disponível neste app (requer integração oficial e permissões). Use o Modo Upload para carregar seus próprios vídeos.',
-      { duration: 6000 }
-    );
-  }, []);
-
-  // Load uploaded videos (fallback mode)
-  const loadUploadedVideos = useCallback((uploadedVideos: AnalyserVideo[]) => {
-    setVideos(uploadedVideos);
+  // Clear all videos
+  const clearVideos = useCallback(() => {
+    setVideos([]);
     setSelectedIds([]);
-    toast.success(`${uploadedVideos.length} vídeos carregados!`);
+    setLoadedUsername('');
+    setFilters(initialFilters);
   }, []);
 
   // Set sorting
@@ -172,7 +187,7 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
         // Format filename with order, metrics, and date
         const index = String(i + 1).padStart(4, '0');
         const date = video.publishedAt.split('T')[0].replace(/-/g, '');
-        const filename = `${index}-${video.likes}-${video.views}-${date}-${video.id}.mp4`;
+        const filename = `${index}-${video.likes}likes-${video.views}views-${date}-${video.id.slice(-8)}.mp4`;
 
         try {
           if (video.localFile) {
@@ -180,8 +195,17 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
             const buffer = await video.localFile.arrayBuffer();
             zip.file(filename, buffer);
             successCount++;
+          } else if (video.videoUrl) {
+            // Try to fetch from videoUrl
+            const response = await fetch(video.videoUrl);
+            if (response.ok) {
+              const buffer = await response.arrayBuffer();
+              zip.file(filename, buffer);
+              successCount++;
+            } else {
+              failCount++;
+            }
           } else {
-            // Downloads via URL são desabilitados por conformidade; use Modo Upload.
             failCount++;
           }
         } catch (err) {
@@ -189,9 +213,9 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
           failCount++;
         }
 
-        // Small delay between downloads to avoid rate limiting
+        // Small delay between downloads
         if (i < total - 1 && !cancelRef.current) {
-          await new Promise(r => setTimeout(r, 200));
+          await new Promise(r => setTimeout(r, 100));
         }
       }
 
@@ -200,7 +224,7 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
       }
 
       if (successCount === 0) {
-        toast.error('Nenhum vídeo foi adicionado ao ZIP. Para baixar, use o Modo Upload e envie seus próprios arquivos.');
+        toast.error('Nenhum vídeo foi baixado. Os links podem ter expirado.');
         return;
       }
 
@@ -215,7 +239,7 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${platform}-videos-${new Date().toISOString().split('T')[0]}.zip`;
+      a.download = `${platform}-${loadedUsername || 'videos'}-${new Date().toISOString().split('T')[0]}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -239,19 +263,20 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
     cancelRef.current = true;
   }, []);
 
-  // Export CSV
+  // Export CSV with download links
   const exportCSV = useCallback(() => {
     if (filteredVideos.length === 0) {
       toast.error('Nenhum vídeo para exportar');
       return;
     }
 
-    const headers = ['posicao', 'platform', 'id', 'url', 'date', 'caption', 'views', 'likes', 'comments', 'shares', 'saves'];
+    const headers = ['posicao', 'platform', 'id', 'url_post', 'url_download', 'date', 'caption', 'views', 'likes', 'comments', 'shares', 'saves'];
     const rows = filteredVideos.map((v, idx) => [
       idx + 1,
       v.platform,
       v.id,
       v.permalink,
+      v.videoUrl || '',
       v.publishedAt,
       `"${(v.caption || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
       v.views,
@@ -266,18 +291,16 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${platform}-videos-${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `${platform}-${loadedUsername || 'videos'}-${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    toast.success('CSV exportado!');
-  }, [filteredVideos, platform]);
+    toast.success('CSV exportado com links de download!');
+  }, [filteredVideos, platform, loadedUsername]);
 
   return {
-    isConnected,
-    isAuthLoading,
     isLoadingVideos,
     videos,
     filteredVideos,
@@ -290,10 +313,10 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
     totalViews,
     totalLikes,
     totalComments,
-    connect,
-    disconnect,
+    loadedUsername,
+    hasMore,
     loadVideos,
-    loadUploadedVideos,
+    clearVideos,
     setSelectedIds,
     setFilters,
     setSort,
