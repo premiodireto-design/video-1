@@ -119,12 +119,6 @@ function parsePostData(node: any): InstagramMedia | null {
   }
 }
 
-// Get cookies from env
-function getCookies(): string {
-  const cookie = Deno.env.get('INSTAGRAM_COOKIE') || '';
-  return cookie;
-}
-
 // Get common headers for Instagram requests
 function getHeaders(cookie?: string): Record<string, string> {
   const headers: Record<string, string> = {
@@ -149,7 +143,7 @@ function getHeaders(cookie?: string): Record<string, string> {
   return headers;
 }
 
-// Fetch user media using the v1 API endpoint (more reliable with auth)
+// Fetch user media using the v1 API endpoint (most reliable with auth)
 async function fetchUserMediaV1(
   userId: string, 
   count: number = 50, 
@@ -186,56 +180,7 @@ async function fetchUserMediaV1(
   return { items: [], hasMore: false };
 }
 
-// Fetch a single page of posts using GraphQL with authentication
-async function fetchGraphQLPage(
-  userId: string, 
-  first: number = 50, 
-  after?: string,
-  cookie?: string
-): Promise<{ posts: any[]; hasNextPage: boolean; endCursor?: string }> {
-  const variables = {
-    id: userId,
-    first,
-    after: after || null,
-  };
-  
-  const queryHash = 'e769aa130647d2354c40ea6a439bfc08';
-  const graphqlUrl = `https://www.instagram.com/graphql/query/?query_hash=${queryHash}&variables=${encodeURIComponent(JSON.stringify(variables))}`;
-  
-  try {
-    const response = await fetch(graphqlUrl, {
-      headers: getHeaders(cookie),
-    });
-    
-    console.log(`GraphQL page fetch status: ${response.status}`);
-    
-    if (response.ok) {
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        console.log('GraphQL returned non-JSON response, likely login page');
-        return { posts: [], hasNextPage: false };
-      }
-      
-      const data = await response.json();
-      const mediaData = data?.data?.user?.edge_owner_to_timeline_media;
-      
-      if (mediaData) {
-        console.log(`GraphQL returned ${mediaData.edges?.length || 0} posts, hasNext: ${mediaData.page_info?.has_next_page}`);
-        return {
-          posts: mediaData.edges || [],
-          hasNextPage: mediaData.page_info?.has_next_page || false,
-          endCursor: mediaData.page_info?.end_cursor,
-        };
-      }
-    }
-  } catch (err) {
-    console.log('GraphQL page fetch failed:', err);
-  }
-  
-  return { posts: [], hasNextPage: false };
-}
-
-// Get user ID and initial posts from profile using authenticated API
+// Get user ID and initial posts from profile
 async function getProfileData(username: string, cookie?: string): Promise<{ 
   userId?: string; 
   posts: any[]; 
@@ -244,7 +189,7 @@ async function getProfileData(username: string, cookie?: string): Promise<{
   totalCount?: number;
 }> {
   try {
-    console.log('Fetching profile data with auth...');
+    console.log('Fetching profile data...');
     
     const response = await fetch(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
       headers: getHeaders(cookie),
@@ -261,14 +206,8 @@ async function getProfileData(username: string, cookie?: string): Promise<{
         const reelsData = user.edge_felix_video_timeline;
         
         console.log(`Profile found. User ID: ${user.id}`);
-        console.log(`  - Timeline posts: ${mediaData?.count || 0} (${mediaData?.edges?.length || 0} loaded)`);
-        console.log(`  - Reels: ${reelsData?.count || 0} (${reelsData?.edges?.length || 0} loaded)`);
-        
-        // Log sample node to debug
-        if (mediaData?.edges?.[0]) {
-          const sample = mediaData.edges[0].node;
-          console.log(`  - Sample node: typename=${sample.__typename}, is_video=${sample.is_video}, has_video_url=${!!sample.video_url}`);
-        }
+        console.log(`  - Timeline posts: ${mediaData?.count || 0}`);
+        console.log(`  - Reels: ${reelsData?.count || 0}`);
         
         return {
           userId: user.id,
@@ -278,6 +217,8 @@ async function getProfileData(username: string, cookie?: string): Promise<{
           totalCount: mediaData?.count || 0,
         };
       }
+    } else if (response.status === 401) {
+      console.log('Unauthorized - cookie may be invalid or expired');
     }
     
   } catch (err) {
@@ -287,7 +228,7 @@ async function getProfileData(username: string, cookie?: string): Promise<{
   return { posts: [], hasNextPage: false };
 }
 
-// Fetch all videos with pagination using V1 API (more reliable)
+// Fetch all videos with pagination using V1 API
 async function fetchAllVideos(username: string, maxVideos: number, cookie?: string): Promise<InstagramMedia[]> {
   const results: InstagramMedia[] = [];
   const seenIds = new Set<string>();
@@ -296,11 +237,11 @@ async function fetchAllVideos(username: string, maxVideos: number, cookie?: stri
   const profileData = await getProfileData(username, cookie);
   
   if (!profileData.userId) {
-    console.log('Could not get user ID');
+    console.log('Could not get user ID - check if cookie is valid');
     return results;
   }
   
-  console.log(`Total content count: ${profileData.totalCount || 'unknown'}`);
+  console.log(`Total posts in profile: ${profileData.totalCount || 'unknown'}`);
   
   // Process initial GraphQL posts first
   for (const edge of profileData.posts) {
@@ -314,17 +255,17 @@ async function fetchAllVideos(username: string, maxVideos: number, cookie?: stri
     }
   }
   
-  console.log(`Got ${results.length} videos from initial GraphQL fetch`);
+  console.log(`Got ${results.length} videos from initial fetch`);
   
   // Now use V1 API for pagination (more reliable)
   let maxId: string | undefined;
   let pageCount = 0;
-  const maxPages = 20;
+  const maxPages = 30; // Allow up to 30 pages
   
   while (results.length < maxVideos && pageCount < maxPages) {
     console.log(`Fetching V1 page ${pageCount + 1}...`);
     
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 400));
     
     const pageData = await fetchUserMediaV1(profileData.userId, 50, maxId, cookie);
     
@@ -366,7 +307,7 @@ serve(async (req) => {
   }
   
   try {
-    const { username, limit = 50 } = await req.json();
+    const { username, limit = 50, cookie } = await req.json();
     
     if (!username) {
       return new Response(
@@ -375,18 +316,30 @@ serve(async (req) => {
       );
     }
     
+    // Use cookie from request, or fallback to env
+    const effectiveCookie = cookie || Deno.env.get('INSTAGRAM_COOKIE') || '';
+    
     const cleanUsername = extractUsername(username);
-    const cookie = getCookies();
     
-    console.log(`=== Fetching Instagram feed for: ${cleanUsername}, limit: ${limit}, hasCookie: ${!!cookie} ===`);
+    console.log(`=== Fetching Instagram feed for: ${cleanUsername}, limit: ${limit}, hasCookie: ${!!effectiveCookie} ===`);
     
-    const videos = await fetchAllVideos(cleanUsername, limit, cookie);
+    if (!effectiveCookie) {
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: 'Cookie do Instagram não configurado. Configure seu cookie para acessar os vídeos.' 
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 401 }
+      );
+    }
+    
+    const videos = await fetchAllVideos(cleanUsername, limit, effectiveCookie);
     
     if (videos.length === 0) {
       return new Response(
         JSON.stringify({ 
           success: false, 
-          error: `Nenhum vídeo encontrado para @${cleanUsername}. Verifique se o perfil é público e possui Reels/vídeos.` 
+          error: `Nenhum vídeo encontrado para @${cleanUsername}. Verifique se o perfil existe e possui vídeos, ou se seu cookie está válido.` 
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
       );
