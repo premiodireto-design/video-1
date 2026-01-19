@@ -38,8 +38,8 @@ export async function loadFFmpegConverter(): Promise<FFmpeg> {
     const coreURL = await pickBlobURL(
       [
         `${localBase}/ffmpeg-core.js`,
-        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-        'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js',
+        'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js',
       ],
       'text/javascript',
       'core'
@@ -47,24 +47,18 @@ export async function loadFFmpegConverter(): Promise<FFmpeg> {
 
     const wasmURL = await pickBlobURL(
       [
-        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
-        'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
+        // WASM is large; keep it on CDN.
+        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm',
+        'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm',
       ],
       'application/wasm',
       'wasm'
     );
 
-    const workerURL = await pickBlobURL(
-      [
-        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.worker.js',
-        'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.worker.js',
-        `${localBase}/ffmpeg-core.worker.js`,
-      ],
-      'text/javascript',
-      'worker'
-    );
+    // Single-threaded core (no SharedArrayBuffer) does NOT ship a dedicated worker file.
+    // Passing workerURL here can break loading (404). So we load only core + wasm.
 
-    await ff.load({ coreURL, wasmURL, workerURL });
+    await ff.load({ coreURL, wasmURL });
 
     ffmpeg = ff;
     return ff;
