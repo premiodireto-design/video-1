@@ -3,7 +3,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Settings, Crop, Square, Volume2, Sparkles, Scissors } from 'lucide-react';
-import type { ProcessingSettings as ProcessingSettingsType } from '@/lib/ffmpegProcessor';
+import type { ProcessingSettings as ProcessingSettingsType } from '@/lib/videoProcessor';
 
 interface ProcessingSettingsProps {
   settings: ProcessingSettingsType;
