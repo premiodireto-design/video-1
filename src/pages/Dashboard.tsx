@@ -65,44 +65,70 @@ export default function Dashboard() {
     setIsProcessing(true);
 
     try {
-      // Process videos one by one
-      for (const video of videosToProcess) {
-        // Update status to processing
-        setVideos(prev => prev.map(v => 
-          v.id === video.id ? { ...v, status: 'processing', progress: 0 } : v
-        ));
+      // Process videos in parallel batches for speed
+      // Limit concurrent processing to avoid overwhelming the browser
+      const CONCURRENT_LIMIT = 3;
+      
+      // Mark all as processing initially
+      setVideos(prev => prev.map(v => {
+        const isInQueue = videosToProcess.some(vp => vp.id === v.id);
+        return isInQueue ? { ...v, status: 'processing', progress: 0 } : v;
+      }));
 
-        try {
-          const outputBlob = await processVideo(
-            video.file,
-            templateFile,
-            greenArea,
-            settings,
-            video.id,
-            updateVideoProgress
-          );
+      // Process in batches
+      const processInBatches = async () => {
+        const queue = [...videosToProcess];
+        const activePromises: Promise<void>[] = [];
+        
+        const processOne = async (video: VideoFile) => {
+          try {
+            const outputBlob = await processVideo(
+              video.file,
+              templateFile,
+              greenArea,
+              settings,
+              video.id,
+              updateVideoProgress
+            );
 
-          // Update with output
-          setVideos(prev => prev.map(v => 
-            v.id === video.id ? { ...v, outputBlob, status: 'completed', progress: 100 } : v
-          ));
-        } catch (error) {
-          console.error('Error processing video:', error);
-          setVideos(prev => prev.map(v => 
-            v.id === video.id ? { 
-              ...v, 
-              status: 'failed', 
-              error: error instanceof Error ? error.message : 'Erro desconhecido',
-              progress: 0 
-            } : v
-          ));
+            // Update with output
+            setVideos(prev => prev.map(v => 
+              v.id === video.id ? { ...v, outputBlob, status: 'completed', progress: 100 } : v
+            ));
+          } catch (error) {
+            console.error('Error processing video:', error);
+            setVideos(prev => prev.map(v => 
+              v.id === video.id ? { 
+                ...v, 
+                status: 'failed', 
+                error: error instanceof Error ? error.message : 'Erro desconhecido',
+                progress: 0 
+              } : v
+            ));
+          }
+        };
+
+        // Start initial batch
+        while (queue.length > 0 || activePromises.length > 0) {
+          // Fill up to concurrent limit
+          while (activePromises.length < CONCURRENT_LIMIT && queue.length > 0) {
+            const video = queue.shift()!;
+            const promise = processOne(video).then(() => {
+              // Remove from active when done
+              const idx = activePromises.indexOf(promise);
+              if (idx > -1) activePromises.splice(idx, 1);
+            });
+            activePromises.push(promise);
+          }
+          
+          // Wait for at least one to complete if at limit
+          if (activePromises.length >= CONCURRENT_LIMIT || (queue.length === 0 && activePromises.length > 0)) {
+            await Promise.race(activePromises);
+          }
         }
-      }
+      };
 
-      const successCount = videosToProcess.filter(v => {
-        const current = videos.find(cv => cv.id === v.id);
-        return current?.status !== 'failed';
-      }).length;
+      await processInBatches();
 
       toast({
         title: 'Processamento concluído!',
@@ -118,7 +144,7 @@ export default function Dashboard() {
     } finally {
       setIsProcessing(false);
     }
-  }, [templateFile, greenArea, settings, updateVideoProgress, toast, videos]);
+  }, [templateFile, greenArea, settings, updateVideoProgress, toast]);
 
   const handlePreview = useCallback(() => {
     const queuedVideos = videos.filter(v => v.status === 'queued');
