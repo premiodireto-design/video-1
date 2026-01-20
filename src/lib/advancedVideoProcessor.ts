@@ -531,13 +531,21 @@ export async function processAdvancedVideo(
       // Add audio track to stream
       destNode.stream.getAudioTracks().forEach(track => stream.addTrack(track));
 
-      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-        ? 'video/webm;codecs=vp9'
-        : 'video/webm';
+      const mimeType = [
+        'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+        'video/mp4;codecs=avc1,mp4a.40.2',
+        'video/mp4',
+      ].find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
+
+      if (!mimeType) {
+        throw new Error('Seu navegador não suporta gravação direta em MP4 no Modo Avançado.');
+      }
 
       const recorder = new MediaRecorder(stream, {
         mimeType,
-        videoBitsPerSecond: bitrate,
+        // Lower bitrate helps avoid encoder stalls that manifest as frozen frames.
+        videoBitsPerSecond: settings.maxQuality ? 12000000 : 6000000,
+        audioBitsPerSecond: 160000,
       });
 
       const chunks: Blob[] = [];
@@ -553,7 +561,7 @@ export async function processAdvancedVideo(
           audioContext.close();
         }
         
-        const blob = new Blob(chunks, { type: 'video/webm' });
+        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType });
         onProgress({ videoId, progress: 100, stage: 'done', message: 'Concluído!' });
         resolve(blob);
       };
@@ -566,14 +574,19 @@ export async function processAdvancedVideo(
       video.currentTime = 0;
       await new Promise(res => setTimeout(res, 100));
 
-      recorder.start();
-      
+      await video.play();
+
+      try {
+        await audioContext?.resume();
+      } catch {}
+
       // Start dubbed audio if available
       if (dubbedAudioSource) {
         dubbedAudioSource.start(0);
       }
-      
-      await video.play();
+
+      // For MP4, avoid timeslice chunking (can generate broken fragmented MP4)
+      recorder.start();
 
       const renderFrame = () => {
         if (video.paused || video.ended) {

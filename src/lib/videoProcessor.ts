@@ -220,16 +220,15 @@ export async function processVideo(
   // We start with the canvas video track, then (after playback starts) we attach an audio track.
   const combinedStream = new MediaStream(canvasStream.getVideoTracks());
 
-  // IMPORTANT (stability): Always record as WebM and convert to MP4.
-  // Direct MP4 recording is inconsistent across browsers and can produce files
-  // that *play with frozen frames while audio continues*.
+  // Prefer MP4 when supported (requested). If the browser can't record MP4 reliably,
+  // we fail fast with a clear error instead of silently switching formats.
   const preferredTypes = [
-    'video/webm;codecs=vp8,opus',
-    'video/webm;codecs=vp9,opus',
-    'video/webm',
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4',
   ];
 
-  const mimeType = preferredTypes.find((t) => MediaRecorder.isTypeSupported(t)) ?? 'video/webm';
+  const mimeType = preferredTypes.find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
 
   // Audio capture helpers
   let audioContext: AudioContext | null = null;
@@ -280,19 +279,18 @@ export async function processVideo(
     return false;
   };
 
-  // Conservative bitrates reduce encode stalls (which cause stutter) and help A/V sync.
-  const recorder = new MediaRecorder(combinedStream, {
-    mimeType,
-    videoBitsPerSecond: settings.maxQuality ? 12000000 : 8000000,
-    audioBitsPerSecond: 192000,
-  });
+  // NOTE: We'll create the MediaRecorder only AFTER we successfully attached an audio track.
+  // Some browsers get unstable (frozen video w/ audio) when tracks are added after recording starts.
+  let recorder: MediaRecorder | null = null;
 
   const chunks: Blob[] = [];
 
-  recorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) {
-      chunks.push(e.data);
-    }
+  const bindRecorderHandlers = (r: MediaRecorder) => {
+    r.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) {
+        chunks.push(e.data);
+      }
+    };
   };
 
   let animationId: number = 0;
@@ -368,7 +366,7 @@ export async function processVideo(
       renderFrame();
     } catch {}
     setTimeout(() => {
-      if (recorder.state === 'recording') {
+      if (recorder && recorder.state === 'recording') {
         recorder.stop();
       }
     }, 300);
@@ -406,7 +404,7 @@ export async function processVideo(
   };
 
   return new Promise<Blob>((resolve, reject) => {
-    recorder.onstop = () => {
+    const handleStop = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
 
@@ -420,7 +418,7 @@ export async function processVideo(
           return;
         }
 
-        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType });
+        const blob = new Blob(chunks, { type: recorder?.mimeType || mimeType });
 
         if (blob.size < 1000) {
           reject(new Error('Vídeo gerado está vazio ou corrompido'));
@@ -438,7 +436,7 @@ export async function processVideo(
       }, 200);
     };
 
-    recorder.onerror = () => {
+    const handleError = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
       try {
@@ -469,12 +467,32 @@ export async function processVideo(
 
       // Attach audio track AFTER playback starts (more reliable across browsers)
       try {
-        await attachAudioTrack();
+        const ok = await attachAudioTrack();
+        if (!ok) {
+          reject(new Error('Não foi possível capturar o áudio do vídeo'));
+          return;
+        }
       } catch {}
 
-      // Start recording with larger timeslice (1000ms) to reduce stuttering
-      // Smaller timeslices cause more frequent data handling which can cause lag
-      recorder.start(1000);
+      if (!mimeType) {
+        reject(new Error('Seu navegador não suporta gravação direta em MP4.'));
+        return;
+      }
+
+      // Conservative bitrates reduce encode stalls (which cause stutter) and help A/V sync.
+      recorder = new MediaRecorder(combinedStream, {
+        mimeType,
+        videoBitsPerSecond: settings.maxQuality ? 12000000 : 6000000,
+        audioBitsPerSecond: 160000,
+      });
+
+      bindRecorderHandlers(recorder);
+      recorder.onstop = handleStop;
+      recorder.onerror = handleError;
+
+      // For MP4, avoid timeslice chunking (some browsers produce broken MP4 fragments).
+      // For WebM (not used here), timeslice would be fine.
+      recorder.start();
       scheduleFrames();
     }).catch((err2) => {
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
