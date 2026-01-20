@@ -17,14 +17,16 @@ export interface AdvancedSettingsType {
   useAiFraming: boolean;
   enableCaptions: boolean;
   captionStyle: 'bottom' | 'center' | 'top';
+  captionLanguage: 'original' | 'pt-BR' | 'en-US' | 'es-ES';
   enableDubbing: boolean;
   dubbingLanguage: string;
+  autoDubForeignOnly: boolean;
 }
 
 export interface AdvancedProcessingProgress {
   videoId: string;
   progress: number;
-  stage: 'loading' | 'transcribing' | 'dubbing' | 'rendering' | 'encoding' | 'done' | 'error';
+  stage: 'loading' | 'transcribing' | 'translating' | 'dubbing' | 'rendering' | 'encoding' | 'done' | 'error';
   message: string;
 }
 
@@ -39,6 +41,7 @@ interface TranscriptionWord {
 interface Transcription {
   text: string;
   words: TranscriptionWord[];
+  detectedLanguage?: string;
 }
 
 /**
@@ -150,18 +153,68 @@ async function transcribeAudio(audioBase64: string, videoId: string): Promise<Tr
 
     if (error) {
       console.warn('[AdvancedProcessor] Transcription error:', error);
-      return { text: '', words: [] };
+      return { text: '', words: [], detectedLanguage: 'unknown' };
     }
 
-    return data as Transcription;
+    return {
+      text: data?.text || '',
+      words: data?.words || [],
+      detectedLanguage: data?.detectedLanguage || 'unknown',
+    };
   } catch (e) {
     console.warn('[AdvancedProcessor] Transcription failed:', e);
-    return { text: '', words: [] };
+    return { text: '', words: [], detectedLanguage: 'unknown' };
   }
 }
 
 /**
- * Generate dubbed audio using TTS (StreamElements - FREE API)
+ * Translate transcription to target language
+ */
+async function translateTranscription(
+  transcription: Transcription,
+  targetLanguage: string
+): Promise<Transcription> {
+  if (!transcription.text || transcription.text.length === 0) {
+    return transcription;
+  }
+
+  try {
+    const { data, error } = await supabase.functions.invoke('generate-dubbing', {
+      body: { text: transcription.text, targetLanguage },
+    });
+
+    if (error || !data?.translatedText) {
+      console.warn('[AdvancedProcessor] Translation failed:', error);
+      return transcription;
+    }
+
+    // Re-estimate word timings for translated text
+    const translatedWords = data.translatedText.split(/\s+/);
+    const totalDuration = transcription.words.length > 0 
+      ? transcription.words[transcription.words.length - 1].end 
+      : 10;
+    
+    const wordDuration = totalDuration / translatedWords.length;
+    
+    const newWords: TranscriptionWord[] = translatedWords.map((word: string, i: number) => ({
+      word,
+      start: i * wordDuration,
+      end: (i + 1) * wordDuration,
+    }));
+
+    return {
+      text: data.translatedText,
+      words: newWords,
+      detectedLanguage: targetLanguage,
+    };
+  } catch (e) {
+    console.warn('[AdvancedProcessor] Translation failed:', e);
+    return transcription;
+  }
+}
+
+/**
+ * Generate dubbed audio using TTS
  */
 async function generateDubbedAudio(
   transcription: Transcription,
@@ -188,12 +241,12 @@ async function generateDubbedAudio(
 
     console.log('[AdvancedProcessor] Text translated:', translationData.translatedText.substring(0, 100) + '...');
 
-    // Generate TTS audio using our edge function (StreamElements - FREE!)
+    // Generate TTS audio using our edge function
     const { data: ttsData, error: ttsError } = await supabase.functions.invoke('generate-tts', {
       body: { 
         text: translationData.translatedText, 
         targetLanguage: language,
-        voiceGender: 'male' // Use male voice for TikTok style
+        voiceGender: 'male'
       },
     });
 
@@ -225,7 +278,15 @@ async function generateDubbedAudio(
 }
 
 /**
- * Draw captions on canvas
+ * Detect if language is Portuguese
+ */
+function isPortuguese(lang: string): boolean {
+  const ptVariants = ['pt', 'pt-br', 'pt-pt', 'portuguese', 'português', 'portugues'];
+  return ptVariants.some(v => lang.toLowerCase().includes(v));
+}
+
+/**
+ * Draw captions on canvas with improved timing
  */
 function drawCaptions(
   ctx: CanvasRenderingContext2D,
@@ -236,16 +297,22 @@ function drawCaptions(
 ) {
   if (!transcription.words || transcription.words.length === 0) return;
 
-  // Find current word and surrounding context
+  // Find current word with extended timing window (slower captions)
   const currentWordIndex = transcription.words.findIndex(
-    (w) => currentTime >= w.start && currentTime <= w.end
+    (w, i) => {
+      // Extend each word's duration by 30% for slower reading
+      const extendedEnd = w.end + (w.end - w.start) * 0.3;
+      const nextWord = transcription.words[i + 1];
+      const effectiveEnd = nextWord ? Math.min(extendedEnd, nextWord.start) : extendedEnd;
+      return currentTime >= w.start && currentTime <= effectiveEnd;
+    }
   );
 
   if (currentWordIndex === -1) return;
 
-  // Get 3-5 words context around current word
+  // Get 4-6 words context around current word for better readability
   const contextStart = Math.max(0, currentWordIndex - 2);
-  const contextEnd = Math.min(transcription.words.length, currentWordIndex + 3);
+  const contextEnd = Math.min(transcription.words.length, currentWordIndex + 4);
   const contextWords = transcription.words.slice(contextStart, contextEnd);
 
   // Calculate position based on style
@@ -255,33 +322,35 @@ function drawCaptions(
   
   switch (style) {
     case 'top':
-      y = greenArea.y + 40;
+      y = greenArea.y + 50;
       break;
     case 'center':
       y = greenArea.y + greenArea.height / 2;
       break;
     case 'bottom':
     default:
-      y = greenArea.y + greenArea.height - 60;
+      y = greenArea.y + greenArea.height - 70;
       break;
   }
 
   // Draw background
-  const fontSize = Math.min(32, greenArea.width / 15);
+  const fontSize = Math.min(28, greenArea.width / 18);
   ctx.font = `bold ${fontSize}px Arial, sans-serif`;
   
   const text = contextWords.map(w => w.word).join(' ');
   const textMetrics = ctx.measureText(text);
   const textWidth = textMetrics.width;
-  const padding = 12;
+  const padding = 14;
   
   const bgX = x + (width - textWidth) / 2 - padding;
   const bgY = y - fontSize - padding / 2;
   const bgWidth = textWidth + padding * 2;
-  const bgHeight = fontSize + padding;
+  const bgHeight = fontSize + padding + 4;
 
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-  ctx.roundRect(bgX, bgY, bgWidth, bgHeight, 8);
+  // Draw rounded background
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+  ctx.beginPath();
+  ctx.roundRect(bgX, bgY, bgWidth, bgHeight, 10);
   ctx.fill();
 
   // Draw words with highlight on current word
@@ -291,7 +360,8 @@ function drawCaptions(
     const word = contextWords[i];
     const isCurrentWord = i === (currentWordIndex - contextStart);
     
-    ctx.fillStyle = isCurrentWord ? '#FFFF00' : '#FFFFFF';
+    // Yellow highlight for current word, white for others
+    ctx.fillStyle = isCurrentWord ? '#FFD700' : '#FFFFFF';
     ctx.fillText(word.word, currentX, y);
     
     currentX += ctx.measureText(word.word + ' ').width;
@@ -310,6 +380,9 @@ export async function processAdvancedVideo(
   onProgress: AdvancedProgressCallback
 ): Promise<Blob> {
   return new Promise(async (resolve, reject) => {
+    let audioContext: AudioContext | null = null;
+    let dubbedAudioSource: AudioBufferSourceNode | null = null;
+    
     try {
       onProgress({ videoId, progress: 0, stage: 'loading', message: 'Carregando arquivos...' });
 
@@ -325,8 +398,9 @@ export async function processAdvancedVideo(
       // Load video
       const videoUrl = URL.createObjectURL(videoFile);
       const video = document.createElement('video');
-      video.muted = true;
+      video.muted = false; // Keep unmuted for audio capture
       video.playsInline = true;
+      video.crossOrigin = 'anonymous';
 
       await new Promise<void>((res, rej) => {
         video.onloadedmetadata = () => res();
@@ -337,7 +411,8 @@ export async function processAdvancedVideo(
       const duration = video.duration;
 
       // Transcription for captions
-      let transcription: Transcription = { text: '', words: [] };
+      let transcription: Transcription = { text: '', words: [], detectedLanguage: 'unknown' };
+      let captionTranscription: Transcription = { text: '', words: [], detectedLanguage: 'unknown' };
       
       if (settings.enableCaptions || settings.enableDubbing) {
         onProgress({ videoId, progress: 5, stage: 'transcribing', message: 'Transcrevendo áudio...' });
@@ -345,22 +420,41 @@ export async function processAdvancedVideo(
         try {
           const audioBase64 = await extractAudioBase64(videoFile);
           transcription = await transcribeAudio(audioBase64, videoId);
+          console.log('[AdvancedProcessor] Detected language:', transcription.detectedLanguage);
         } catch (e) {
           console.warn('[AdvancedProcessor] Audio extraction failed:', e);
         }
       }
 
-      // Dubbing - get dubbed audio blob
+      // Translate captions if needed
+      if (settings.enableCaptions && transcription.text) {
+        if (settings.captionLanguage !== 'original') {
+          onProgress({ videoId, progress: 10, stage: 'translating', message: 'Traduzindo legendas...' });
+          captionTranscription = await translateTranscription(transcription, settings.captionLanguage);
+        } else {
+          captionTranscription = transcription;
+        }
+      }
+
+      // Dubbing - check if should dub based on detected language
       let dubbedAudioBlob: Blob | null = null;
-      let dubbedTranslation: string = '';
+      let shouldDub: boolean = !!(settings.enableDubbing && transcription.text);
       
-      if (settings.enableDubbing && transcription.text) {
+      if (shouldDub && settings.autoDubForeignOnly) {
+        // Only dub if video is NOT in Portuguese
+        const detectedLang = transcription.detectedLanguage || 'unknown';
+        if (isPortuguese(detectedLang)) {
+          console.log('[AdvancedProcessor] Video is in Portuguese, skipping dubbing');
+          shouldDub = false;
+        }
+      }
+      
+      if (shouldDub) {
         onProgress({ videoId, progress: 15, stage: 'dubbing', message: 'Gerando dublagem...' });
         const dubbingResult = await generateDubbedAudio(transcription, settings.dubbingLanguage, duration);
         if (dubbingResult) {
           dubbedAudioBlob = dubbingResult.audioBlob;
-          dubbedTranslation = dubbingResult.translatedText;
-          console.log('[AdvancedProcessor] Dubbed audio ready, translation:', dubbedTranslation.substring(0, 50) + '...');
+          console.log('[AdvancedProcessor] Dubbed audio ready');
         }
       }
 
@@ -402,49 +496,40 @@ export async function processAdvancedVideo(
       
       const stream = canvas.captureStream(fps);
       
-      // Add audio track - use dubbed audio OR original (but not both!)
+      // Setup audio context and add audio track
+      audioContext = new AudioContext();
+      const destNode = audioContext.createMediaStreamDestination();
+      
       if (dubbedAudioBlob) {
-        // Use ONLY dubbed audio (remove original voice)
-        console.log('[AdvancedProcessor] Using dubbed audio, removing original voice...');
+        // Use dubbed audio instead of original
+        console.log('[AdvancedProcessor] Using dubbed audio...');
         try {
-          const audioContext = new AudioContext();
           const arrayBuffer = await dubbedAudioBlob.arrayBuffer();
           const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-          const source = audioContext.createBufferSource();
-          source.buffer = audioBuffer;
-          const dest = audioContext.createMediaStreamDestination();
-          source.connect(dest);
-          source.start();
-          dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
-          console.log('[AdvancedProcessor] Dubbed audio track added successfully');
+          dubbedAudioSource = audioContext.createBufferSource();
+          dubbedAudioSource.buffer = audioBuffer;
+          dubbedAudioSource.connect(destNode);
+          // Will start when video plays
         } catch (e) {
-          console.warn('[AdvancedProcessor] Failed to add dubbed audio:', e);
-          // Fallback to original audio if dubbing fails
-          try {
-            video.muted = false;
-            const audioCtx = new AudioContext();
-            const sourceNode = audioCtx.createMediaElementSource(video);
-            const dest = audioCtx.createMediaStreamDestination();
-            sourceNode.connect(dest);
-            dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
-          } catch (e2) {
-            console.warn('[AdvancedProcessor] Fallback audio also failed:', e2);
-          }
+          console.warn('[AdvancedProcessor] Failed to decode dubbed audio:', e);
         }
       } else {
-        // Use original audio (no dubbing)
+        // Use original video audio
         console.log('[AdvancedProcessor] Using original audio...');
         try {
-          video.muted = false;
-          const audioCtx = new AudioContext();
-          const sourceNode = audioCtx.createMediaElementSource(video);
-          const dest = audioCtx.createMediaStreamDestination();
-          sourceNode.connect(dest);
-          dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
+          const sourceNode = audioContext.createMediaElementSource(video);
+          const gainNode = audioContext.createGain();
+          gainNode.gain.value = 1.0;
+          sourceNode.connect(gainNode);
+          gainNode.connect(destNode);
+          gainNode.connect(audioContext.destination); // Also play locally if needed
         } catch (e) {
-          console.warn('[AdvancedProcessor] Failed to add original audio:', e);
+          console.warn('[AdvancedProcessor] Failed to capture original audio:', e);
         }
       }
+
+      // Add audio track to stream
+      destNode.stream.getAudioTracks().forEach(track => stream.addTrack(track));
 
       const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
         ? 'video/webm;codecs=vp9'
@@ -464,6 +549,10 @@ export async function processAdvancedVideo(
         URL.revokeObjectURL(templateUrl);
         URL.revokeObjectURL(videoUrl);
         
+        if (audioContext) {
+          audioContext.close();
+        }
+        
         const blob = new Blob(chunks, { type: 'video/webm' });
         onProgress({ videoId, progress: 100, stage: 'done', message: 'Concluído!' });
         resolve(blob);
@@ -473,12 +562,18 @@ export async function processAdvancedVideo(
         reject(new Error('Recording failed'));
       };
 
-      // Render frames
+      // Reset video and start recording
       video.currentTime = 0;
       await new Promise(res => setTimeout(res, 100));
 
       recorder.start();
-      video.play();
+      
+      // Start dubbed audio if available
+      if (dubbedAudioSource) {
+        dubbedAudioSource.start(0);
+      }
+      
+      await video.play();
 
       const renderFrame = () => {
         if (video.paused || video.ended) {
@@ -486,25 +581,17 @@ export async function processAdvancedVideo(
           return;
         }
 
-        // Clear and draw template
+        // Clear canvas and draw template
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(templateImg, 0, 0);
-
-        // Create mask for green area
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = templateImg.width;
-        maskCanvas.height = templateImg.height;
-        const maskCtx = maskCanvas.getContext('2d')!;
-        maskCtx.drawImage(templateImg, 0, 0);
-
-        // Clear green area to white
-        maskCtx.fillStyle = '#FFFFFF';
-        maskCtx.fillRect(greenArea.x, greenArea.y, greenArea.width, greenArea.height);
-
-        // Clip and draw video
+        
+        // Fill green area with white first (prevents black flash)
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(greenArea.x, greenArea.y, greenArea.width, greenArea.height);
+        
+        // Draw video in green area
         ctx.save();
         ctx.beginPath();
-        ctx.rect(greenArea.x, greenArea.y, greenArea.width, greenArea.height);
+        ctx.rect(greenArea.x - 2, greenArea.y - 2, greenArea.width + 4, greenArea.height + 4);
         ctx.clip();
 
         const drawX = greenArea.x + offsetX;
@@ -515,29 +602,20 @@ export async function processAdvancedVideo(
         ctx.drawImage(video, drawX, drawY, drawW, drawH);
         ctx.restore();
 
-        // Draw template over video (for overlays)
+        // Draw template on top (overlay)
+        ctx.drawImage(templateImg, 0, 0);
+        
+        // Redraw video in green area (template has green, this replaces it)
         ctx.save();
-        ctx.globalCompositeOperation = 'source-over';
-        
-        // Make green area transparent
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imageData.data;
-        
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-          
-          // Detect green
-          if (g > 150 && g > r + 50 && g > b + 50) {
-            // Don't make it transparent - the video is already drawn
-          }
-        }
+        ctx.beginPath();
+        ctx.rect(greenArea.x - 2, greenArea.y - 2, greenArea.width + 4, greenArea.height + 4);
+        ctx.clip();
+        ctx.drawImage(video, drawX, drawY, drawW, drawH);
         ctx.restore();
 
         // Draw captions if enabled
-        if (settings.enableCaptions && transcription.words.length > 0) {
-          drawCaptions(ctx, transcription, video.currentTime, greenArea, settings.captionStyle);
+        if (settings.enableCaptions && captionTranscription.words.length > 0) {
+          drawCaptions(ctx, captionTranscription, video.currentTime, greenArea, settings.captionStyle);
         }
 
         // Draw watermark
@@ -557,6 +635,9 @@ export async function processAdvancedVideo(
 
       renderFrame();
     } catch (error) {
+      if (audioContext) {
+        audioContext.close();
+      }
       onProgress({ videoId, progress: 0, stage: 'error', message: error instanceof Error ? error.message : 'Erro desconhecido' });
       reject(error);
     }

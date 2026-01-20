@@ -3,7 +3,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { Sparkles, MessageSquare, Volume2, Settings } from 'lucide-react';
+import { Sparkles, MessageSquare, Volume2, Settings, Languages } from 'lucide-react';
 
 export interface AdvancedSettingsType {
   fitMode: 'cover' | 'contain' | 'fill';
@@ -14,8 +14,10 @@ export interface AdvancedSettingsType {
   useAiFraming: boolean;
   enableCaptions: boolean;
   captionStyle: 'bottom' | 'center' | 'top';
+  captionLanguage: 'original' | 'pt-BR' | 'en-US' | 'es-ES';
   enableDubbing: boolean;
   dubbingLanguage: string;
+  autoDubForeignOnly: boolean;
 }
 
 interface AdvancedSettingsProps {
@@ -60,22 +62,46 @@ export function AdvancedSettings({ settings, onSettingsChange, disabled }: Advan
           </div>
 
           {settings.enableCaptions && (
-            <div className="ml-6 space-y-2">
-              <Label className="text-sm text-muted-foreground">Posição das legendas</Label>
-              <Select
-                value={settings.captionStyle}
-                onValueChange={(value: 'bottom' | 'center' | 'top') => update('captionStyle', value)}
-                disabled={disabled}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="bottom">Inferior</SelectItem>
-                  <SelectItem value="center">Centro</SelectItem>
-                  <SelectItem value="top">Superior</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="ml-6 space-y-3">
+              <div className="space-y-2">
+                <Label className="text-sm text-muted-foreground flex items-center gap-1">
+                  <Languages className="h-3 w-3" />
+                  Idioma das legendas
+                </Label>
+                <Select
+                  value={settings.captionLanguage}
+                  onValueChange={(value: 'original' | 'pt-BR' | 'en-US' | 'es-ES') => update('captionLanguage', value)}
+                  disabled={disabled}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="original">Idioma original</SelectItem>
+                    <SelectItem value="pt-BR">Português (Brasil)</SelectItem>
+                    <SelectItem value="en-US">Inglês</SelectItem>
+                    <SelectItem value="es-ES">Espanhol</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="space-y-2">
+                <Label className="text-sm text-muted-foreground">Posição das legendas</Label>
+                <Select
+                  value={settings.captionStyle}
+                  onValueChange={(value: 'bottom' | 'center' | 'top') => update('captionStyle', value)}
+                  disabled={disabled}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="bottom">Inferior</SelectItem>
+                    <SelectItem value="center">Centro</SelectItem>
+                    <SelectItem value="top">Superior</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           )}
 
@@ -96,22 +122,36 @@ export function AdvancedSettings({ settings, onSettingsChange, disabled }: Advan
           </div>
 
           {settings.enableDubbing && (
-            <div className="ml-6 space-y-2">
-              <Label className="text-sm text-muted-foreground">Idioma da dublagem</Label>
-              <Select
-                value={settings.dubbingLanguage}
-                onValueChange={(value) => update('dubbingLanguage', value)}
-                disabled={disabled}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="pt-BR">Português (Brasil)</SelectItem>
-                  <SelectItem value="pt-PT">Português (Portugal)</SelectItem>
-                  <SelectItem value="es-ES">Espanhol</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="ml-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="autoDub" className="cursor-pointer text-sm">
+                  Dublar apenas vídeos estrangeiros
+                </Label>
+                <Switch
+                  id="autoDub"
+                  checked={settings.autoDubForeignOnly}
+                  onCheckedChange={(checked) => update('autoDubForeignOnly', checked)}
+                  disabled={disabled}
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label className="text-sm text-muted-foreground">Idioma da dublagem</Label>
+                <Select
+                  value={settings.dubbingLanguage}
+                  onValueChange={(value) => update('dubbingLanguage', value)}
+                  disabled={disabled}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pt-BR">Português (Brasil)</SelectItem>
+                    <SelectItem value="pt-PT">Português (Portugal)</SelectItem>
+                    <SelectItem value="es-ES">Espanhol</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           )}
         </CardContent>
