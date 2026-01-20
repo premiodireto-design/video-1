@@ -129,13 +129,17 @@ export async function convertWebMToMP4(
 
     console.log('[FFmpeg Converter] Starting conversion...');
     // Convert to MP4 (H.264 + AAC) - ULTRAFAST mode
+    // Force CFR 30fps + audio resample to reduce A/V drift and playback stutter.
     const execResult = await ff.exec([
       '-i', inputName,
+      '-r', '30',
+      '-vsync', 'cfr',
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '23',
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
+      '-af', 'aresample=async=1:first_pts=0',
       '-b:a', '128k',
       '-movflags', '+faststart',
       '-y',
