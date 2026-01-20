@@ -136,6 +136,15 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
     setFilters(initialFilters);
   }, []);
 
+  // Directly set videos (for JSON import, scraper, etc)
+  const setVideosDirectly = useCallback((newVideos: AnalyserVideo[], username: string) => {
+    setVideos(newVideos);
+    setSelectedIds([]);
+    setLoadedUsername(username);
+    setHasMore(false);
+    toast.success(`${newVideos.length} vídeos importados de @${username}!`);
+  }, []);
+
   // Set sorting
   const setSort = useCallback((newSortBy: SortBy, newSortOrder: SortOrder) => {
     setSortBy(newSortBy);
@@ -317,6 +326,7 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
     hasMore,
     loadVideos,
     clearVideos,
+    setVideosDirectly,
     setSelectedIds,
     setFilters,
     setSort,
