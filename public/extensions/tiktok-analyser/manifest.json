@@ -45,7 +45,8 @@
       "resources": [
         "dashboard.html",
         "dashboard.js",
-        "dashboard.css"
+        "dashboard.css",
+        "vendor/jszip.min.js"
       ],
       "matches": ["*://*.tiktok.com/*"]
     }

@@ -24,6 +24,11 @@ let selectedVideoIds = new Set();
 // Stats cache (TikTok profile grid often doesn't show likes/comments; we fetch via internal API)
 const tatStatsCache = new Map(); // id -> {likes, comments, shares}
 const tatStatsLoading = new Set();
+
+// Download URL cache (prefer internal CDN links like v16m-*.tiktokcdn.com)
+const tatDownloadUrlCache = new Map(); // id -> downloadUrl
+const tatDownloadUrlLoading = new Set();
+
 let tatApplyScheduled = false;
 
 // Listen for messages from popup/background
@@ -1087,21 +1092,29 @@ async function fetchTikTokItemStats(videoId) {
     const res = await fetch(url, {
       credentials: 'include',
       headers: {
-        'Accept': 'application/json, text/plain, */*'
-      }
+        Accept: 'application/json, text/plain, */*',
+      },
     });
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    const stats = data?.itemInfo?.itemStruct?.stats || data?.itemInfo?.itemStruct?.statsV2;
+
+    const item = data?.itemInfo?.itemStruct;
+    const stats = item?.stats || item?.statsV2;
 
     if (!stats) return null;
 
     const result = {
       likes: parseInt(stats.diggCount || stats.likeCount || 0),
       comments: parseInt(stats.commentCount || 0),
-      shares: parseInt(stats.shareCount || 0)
+      shares: parseInt(stats.shareCount || 0),
     };
+
+    // Also opportunistically cache the internal CDN download url if present
+    const playAddr = item?.video?.playAddr || item?.video?.downloadAddr || null;
+    if (typeof playAddr === 'string' && playAddr.includes('tiktokcdn.com')) {
+      tatDownloadUrlCache.set(videoId, playAddr);
+    }
 
     tatStatsCache.set(videoId, result);
     return result;
@@ -1111,6 +1124,64 @@ async function fetchTikTokItemStats(videoId) {
   } finally {
     tatStatsLoading.delete(videoId);
   }
+}
+
+async function fetchTikTokItemDownloadUrl(videoId) {
+  if (!videoId) return null;
+  if (tatDownloadUrlCache.has(videoId)) return tatDownloadUrlCache.get(videoId);
+  if (tatDownloadUrlLoading.has(videoId)) return null;
+
+  tatDownloadUrlLoading.add(videoId);
+
+  try {
+    const url = `https://www.tiktok.com/api/item/detail/?aid=1988&itemId=${encodeURIComponent(videoId)}`;
+    const res = await fetch(url, {
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json, text/plain, */*',
+      },
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const item = data?.itemInfo?.itemStruct;
+    const playAddr = item?.video?.playAddr || item?.video?.downloadAddr || null;
+
+    if (typeof playAddr === 'string' && playAddr.includes('tiktokcdn.com')) {
+      tatDownloadUrlCache.set(videoId, playAddr);
+      return playAddr;
+    }
+
+    return null;
+  } catch (e) {
+    return null;
+  } finally {
+    tatDownloadUrlLoading.delete(videoId);
+  }
+}
+
+async function ensureDownloadUrlsForVideos(videos) {
+  // Fill missing CDN URLs in a controlled way
+  const missing = (videos || [])
+    .filter((v) => v && v.id && (!v.downloadUrl || !String(v.downloadUrl).includes('tiktokcdn.com')))
+    .slice(0, 120);
+
+  if (missing.length === 0) return;
+
+  const concurrency = 4;
+  let idx = 0;
+
+  const worker = async () => {
+    while (idx < missing.length) {
+      const i = idx++;
+      const v = missing[i];
+      const dl = await fetchTikTokItemDownloadUrl(v.id);
+      if (dl) v.downloadUrl = dl;
+      await sleep(120);
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, worker));
 }
 
 async function ensureStatsForVideos(videos) {
@@ -1297,7 +1368,7 @@ function clearSelection() {
 
 // Download videos as ZIP
 async function downloadVideosAsZip() {
-  const selectedVideos = extractedVideos.filter(v => selectedVideoIds.has(v.id));
+  const selectedVideos = extractedVideos.filter((v) => selectedVideoIds.has(v.id));
   if (selectedVideos.length === 0) return;
 
   // Load JSZip dynamically if not available
@@ -1310,7 +1381,10 @@ async function downloadVideosAsZip() {
   }
 
   // Sort by current filter order
-  const orderedVideos = (window._tatFilteredVideos || []).filter(v => selectedVideoIds.has(v.id));
+  const orderedVideos = (window._tatFilteredVideos || []).filter((v) => selectedVideoIds.has(v.id));
+
+  // Ensure we have internal CDN links (v16m-*.tiktokcdn.com) to download and to keep the exact order
+  await ensureDownloadUrlsForVideos(orderedVideos);
 
   const modal = toolbarElement.querySelector('#tat-modal');
   const progressFill = toolbarElement.querySelector('#tat-dl-progress');
@@ -1335,46 +1409,51 @@ async function downloadVideosAsZip() {
   const zip = new JSZip();
   let successCount = 0;
   let failCount = 0;
-  
+
   for (let i = 0; i < orderedVideos.length; i++) {
     if (extractionAborted) {
       addLog('Download cancelado pelo usuário.', 'error');
       break;
     }
-    
+
     const video = orderedVideos[i];
     const progress = ((i + 1) / orderedVideos.length) * 100;
-    
+
     progressFill.style.width = `${progress}%`;
     progressText.textContent = `Baixando ${i + 1} de ${orderedVideos.length}...`;
-    
+
     try {
       addLog(`[${i + 1}/${orderedVideos.length}] Baixando ${video.id}...`);
-      
-      // Try multiple download sources (prefer internal CDN url when available)
+
+      // Prefer internal CDN url (tiktokcdn). Fallback only if necessary.
+      const cdnUrl = (video.downloadUrl && String(video.downloadUrl).includes('tiktokcdn.com'))
+        ? video.downloadUrl
+        : (tatDownloadUrlCache.get(video.id) || null);
+
       const downloadUrls = [
+        cdnUrl,
         video.downloadUrl,
         `https://tikwm.com/video/media/hdplay/${video.id}.mp4`,
         `https://www.tikwm.com/video/media/play/${video.id}.mp4`,
       ].filter(Boolean);
-      
+
       let blob = null;
-      
+
       for (const url of downloadUrls) {
         if (extractionAborted) break;
-        
+
         try {
           const response = await fetch(url, {
             mode: 'cors',
-            credentials: 'omit',
+            credentials: url.includes('tiktok.com') ? 'include' : 'omit',
             headers: {
-              'Accept': 'video/mp4,video/*,*/*'
-            }
+              Accept: 'video/mp4,video/*,*/*',
+            },
           });
-          
+
           if (response.ok) {
             blob = await response.blob();
-            if (blob.size > 10000) { // At least 10KB
+            if (blob.size > 10000) {
               addLog(`  ✓ Sucesso via ${new URL(url).hostname}`, 'success');
               break;
             }
@@ -1383,17 +1462,20 @@ async function downloadVideosAsZip() {
           console.log('Download attempt failed:', url, e);
         }
       }
-      
+
       if (blob && blob.size > 10000) {
+        // Keep exact sequence from filter ordering
         const filename = `${String(i + 1).padStart(3, '0')}_${video.id}.mp4`;
         zip.file(filename, blob);
         successCount++;
       } else {
         addLog(`  ✗ Falhou - tentando proxy...`, 'error');
-        
+
         // Try with a CORS proxy as last resort
         try {
-          const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(`https://tikwm.com/video/media/hdplay/${video.id}.mp4`)}`;
+          const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(
+            cdnUrl || `https://tikwm.com/video/media/hdplay/${video.id}.mp4`
+          )}`;
           const response = await fetch(proxyUrl);
           if (response.ok) {
             blob = await response.blob();
@@ -1413,31 +1495,30 @@ async function downloadVideosAsZip() {
           addLog(`  ✗ Não foi possível baixar`, 'error');
         }
       }
-      
     } catch (e) {
       console.error('Download failed for video:', video.id, e);
       addLog(`  ✗ Erro: ${e.message}`, 'error');
       failCount++;
     }
-    
+
     // Small delay between downloads
     await sleep(500);
   }
-  
+
   if (extractionAborted) {
     modal.classList.remove('active');
     return;
   }
-  
+
   if (successCount > 0) {
     progressText.textContent = 'Gerando arquivo ZIP...';
     addLog(`Compactando ${successCount} vídeos...`);
-    
+
     try {
       const content = await zip.generateAsync({ type: 'blob' }, (metadata) => {
         progressFill.style.width = `${metadata.percent}%`;
       });
-      
+
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
@@ -1446,7 +1527,7 @@ async function downloadVideosAsZip() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      
+
       addLog(`✅ Download concluído! ${successCount} vídeos no ZIP.`, 'success');
       progressText.textContent = `✅ ${successCount} vídeos baixados!`;
     } catch (e) {
@@ -1455,46 +1536,43 @@ async function downloadVideosAsZip() {
   } else {
     progressText.textContent = '❌ Nenhum vídeo baixado';
     addLog('Nenhum vídeo conseguiu ser baixado.', 'error');
-    addLog('Os links podem estar bloqueados pelo TikTok.', 'error');
-    addLog('Tente exportar o CSV e usar um downloader externo.', 'error');
+    addLog('Pode ser bloqueio temporário do TikTok para downloads.', 'error');
+    addLog('Tente novamente após alguns minutos.', 'error');
   }
-  
+
   if (failCount > 0) {
     addLog(`⚠️ ${failCount} vídeos falharam.`, 'error');
   }
 }
 
 // Export CSV
-function exportCSV() {
+async function exportCSV() {
   const videos = window._tatFilteredVideos || extractedVideos;
 
-  const headers = [
-    'Posição',
-    'ID',
-    'URL TikTok',
-    'Link Interno (CDN)',
-    'Link Download (tikwm)',
-    'Descrição',
-    'Views',
-    'Likes',
-    'Comentários',
-    'Data'
-  ];
+  // Ensure CDN links are present for the CSV, in the SAME order as the filter
+  await ensureDownloadUrlsForVideos(videos);
 
-  const rows = videos.map((v, idx) => [
-    idx + 1,
-    v.id,
-    v.url,
-    v.downloadUrl || '',
-    `https://tikwm.com/video/media/hdplay/${v.id}.mp4`,
-    `"${(v.description || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
-    v.views,
-    v.likes,
-    v.comments,
-    v.createTime ? new Date(v.createTime).toLocaleDateString('pt-BR') : ''
-  ]);
+  const headers = ['Posição', 'ID', 'URL TikTok', 'Link Interno (CDN)', 'Descrição', 'Views', 'Likes', 'Comentários', 'Data'];
 
-  const csv = '\ufeff' + [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');
+  const rows = videos.map((v, idx) => {
+    const cdn = (v.downloadUrl && String(v.downloadUrl).includes('tiktokcdn.com'))
+      ? v.downloadUrl
+      : (tatDownloadUrlCache.get(v.id) || v.downloadUrl || '');
+
+    return [
+      idx + 1,
+      v.id,
+      v.url,
+      cdn,
+      `"${(v.description || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+      v.views,
+      v.likes,
+      v.comments,
+      v.createTime ? new Date(v.createTime).toLocaleDateString('pt-BR') : '',
+    ];
+  });
+
+  const csv = '\ufeff' + [headers.join(';'), ...rows.map((r) => r.join(';'))].join('\n');
   downloadFile(csv, `tiktok_${getUsername()}_${Date.now()}.csv`, 'text/csv;charset=utf-8');
 }
 
@@ -1606,14 +1684,28 @@ new MutationObserver(() => {
   }
 }).observe(document, { subtree: true, childList: true });
 
-// Load JSZip dynamically via fetch + eval (works in extension context)
+// Load JSZip with LOCAL file first (avoids TikTok CSP + blocked CDNs)
 async function loadJSZip() {
   if (typeof JSZip !== 'undefined') return true;
 
+  // 1) Try local packaged JSZip (best, no CSP)
+  try {
+    const localUrl = chrome.runtime.getURL('vendor/jszip.min.js');
+    const res = await fetch(localUrl);
+    if (res.ok) {
+      const code = await res.text();
+      new Function(code)();
+      if (typeof JSZip !== 'undefined') return true;
+    }
+  } catch (e) {
+    console.warn('[TikTok Analyser] Failed to load local JSZip', e);
+  }
+
+  // 2) Fallback CDNs (may be blocked)
   const cdnUrls = [
     'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
     'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
-    'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'
+    'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js',
   ];
 
   for (const url of cdnUrls) {
@@ -1621,12 +1713,10 @@ async function loadJSZip() {
       console.log('[TikTok Analyser] Loading JSZip from:', url);
       const response = await fetch(url, { cache: 'force-cache' });
       if (!response.ok) continue;
-      
+
       const code = await response.text();
-      // Use Function constructor to eval in global scope
-      const fn = new Function(code);
-      fn();
-      
+      new Function(code)();
+
       if (typeof JSZip !== 'undefined') {
         console.log('[TikTok Analyser] JSZip loaded successfully');
         return true;
@@ -1636,7 +1726,7 @@ async function loadJSZip() {
     }
   }
 
-  console.error('[TikTok Analyser] Failed to load JSZip from all CDNs');
+  console.error('[TikTok Analyser] Failed to load JSZip');
   return false;
 }
 
