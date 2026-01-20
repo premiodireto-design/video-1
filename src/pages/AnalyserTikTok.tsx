@@ -7,15 +7,30 @@ import { KPICards } from '@/components/analyser/KPICards';
 import { FiltersSection } from '@/components/analyser/FiltersSection';
 import { VideoList } from '@/components/analyser/VideoList';
 import { DownloadSection } from '@/components/analyser/DownloadSection';
+import { TikTokModeSelector, type TikTokMode } from '@/components/analyser/TikTokModeSelector';
+import { TikTokJsonImport } from '@/components/analyser/TikTokJsonImport';
+import { TikTokScraperMode } from '@/components/analyser/TikTokScraperMode';
 import { useAnalyserStore } from '@/hooks/useAnalyserStore';
+import type { AnalyserVideo } from '@/types/analyser';
 
 export default function AnalyserTikTok() {
   const store = useAnalyserStore('tiktok');
   const [hasCookie, setHasCookie] = useState(false);
+  const [selectedMode, setSelectedMode] = useState<TikTokMode>('json');
+  const [scraperLoading, setScraperLoading] = useState(false);
 
   const handleCookieChange = useCallback((hasIt: boolean) => {
     setHasCookie(hasIt);
   }, []);
+
+  const handleJsonImport = useCallback((videos: AnalyserVideo[], username: string) => {
+    // Directly set videos in the store
+    store.setVideosDirectly(videos, username);
+  }, [store]);
+
+  const handleScraperLoad = useCallback((videos: AnalyserVideo[], username: string) => {
+    store.setVideosDirectly(videos, username);
+  }, [store]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -27,18 +42,42 @@ export default function AnalyserTikTok() {
           subtitle="Carregue perfis públicos, filtre por métricas e exporte vídeos"
         />
 
-        <CookieInput 
-          platform="tiktok"
-          onCookieChange={handleCookieChange}
+        <TikTokModeSelector
+          selectedMode={selectedMode}
+          onModeChange={setSelectedMode}
         />
 
-        {hasCookie && (
-          <ProfileInput 
-            platform="tiktok"
-            onLoadVideos={store.loadVideos}
+        {selectedMode === 'cookie' && (
+          <>
+            <CookieInput 
+              platform="tiktok"
+              onCookieChange={handleCookieChange}
+            />
+
+            {hasCookie && (
+              <ProfileInput 
+                platform="tiktok"
+                onLoadVideos={store.loadVideos}
+                isLoading={store.isLoadingVideos}
+                loadedUsername={store.loadedUsername}
+                onClear={store.clearVideos}
+              />
+            )}
+          </>
+        )}
+
+        {selectedMode === 'json' && (
+          <TikTokJsonImport
+            onImport={handleJsonImport}
             isLoading={store.isLoadingVideos}
-            loadedUsername={store.loadedUsername}
-            onClear={store.clearVideos}
+          />
+        )}
+
+        {selectedMode === 'scraper' && (
+          <TikTokScraperMode
+            onLoadVideos={handleScraperLoad}
+            isLoading={scraperLoading}
+            setIsLoading={setScraperLoading}
           />
         )}
 
@@ -80,10 +119,29 @@ export default function AnalyserTikTok() {
           </>
         )}
 
-        {store.videos.length === 0 && !store.isLoadingVideos && hasCookie && (
+        {store.videos.length === 0 && !store.isLoadingVideos && !scraperLoading && (
           <div className="text-center py-12 text-muted-foreground">
-            <p>Digite um @ ou URL de perfil acima para carregar os vídeos.</p>
-            <p className="text-sm mt-2">Funciona apenas com perfis públicos.</p>
+            {selectedMode === 'cookie' && hasCookie && (
+              <>
+                <p>Digite um @ ou URL de perfil acima para carregar os vídeos.</p>
+                <p className="text-sm mt-2">⚠️ O modo Cookie pode falhar se o TikTok bloquear o servidor.</p>
+              </>
+            )}
+            {selectedMode === 'cookie' && !hasCookie && (
+              <p>Configure seu cookie do TikTok para começar.</p>
+            )}
+            {selectedMode === 'json' && (
+              <>
+                <p>Cole o JSON dos vídeos acima para começar.</p>
+                <p className="text-sm mt-2">💡 Use extensões como "Sort for TikTok" para exportar os dados.</p>
+              </>
+            )}
+            {selectedMode === 'scraper' && (
+              <>
+                <p>Configure sua API key e digite um perfil para fazer scrape.</p>
+                <p className="text-sm mt-2">💡 O Firecrawl é um serviço pago de scraping profissional.</p>
+              </>
+            )}
           </div>
         )}
       </main>
