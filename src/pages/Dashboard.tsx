@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import JSZip from 'jszip';
 import { Header } from '@/components/layout/Header';
 import { TemplateUpload } from '@/components/template/TemplateUpload';
@@ -13,6 +14,8 @@ import {
 } from '@/lib/videoProcessor';
 import { convertWebMToMP4, loadFFmpegConverter } from '@/lib/videoConverter';
 import { type GreenArea } from '@/lib/greenDetection';
+import { Button } from '@/components/ui/button';
+import { Sparkles } from 'lucide-react';
 
 export default function Dashboard() {
   const [templateFile, setTemplateFile] = useState<File | null>(null);
@@ -407,10 +410,20 @@ export default function Dashboard() {
       
       <main className="container py-6">
         <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight">Processar Vídeos em Lote</h1>
-          <p className="text-muted-foreground">
-            Crie vídeos profissionais usando seu template do Canva
-          </p>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Processar Vídeos em Lote</h1>
+              <p className="text-muted-foreground">
+                Crie vídeos profissionais usando seu template do Canva
+              </p>
+            </div>
+            <Link to="/advanced">
+              <Button className="gap-2 bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70">
+                <Sparkles className="h-4 w-4" />
+                MODO AVANÇADO de Edição
+              </Button>
+            </Link>
+          </div>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-3">
