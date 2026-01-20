@@ -21,13 +21,6 @@ interface AnalysisResult {
     anchorX: number; // 0-1, horizontal anchor point
     anchorY: number; // 0-1, vertical anchor point (0=top, 0.5=center, 1=bottom)
   };
-  // NEW: Detected actual video content area (excluding black bars, overlays, text)
-  contentBounds: {
-    x: number; // 0-1 normalized left edge of actual video content
-    y: number; // 0-1 normalized top edge of actual video content
-    width: number; // 0-1 normalized width of actual video content
-    height: number; // 0-1 normalized height of actual video content
-  };
 }
 
 serve(async (req) => {
@@ -64,37 +57,21 @@ serve(async (req) => {
             content: [
               {
                 type: "text",
-                text: `Analyze this video frame for optimal cropping. I need to:
-1. Detect the ACTUAL video content area (exclude black bars, letterboxing, pillarboxing, overlay texts, watermarks, UI elements)
-2. Identify faces and important content within that area
-3. Suggest the best crop position
+                text: `Analyze this video frame for optimal cropping. I need to fit this video into a vertical frame, prioritizing keeping faces and important content visible.
 
 Respond ONLY with a JSON object (no markdown, no explanation):
 {
   "hasFace": boolean,
   "facePosition": { "x": 0-1, "y": 0-1, "width": 0-1, "height": 0-1 } or null,
   "contentFocus": { "x": 0-1, "y": 0-1 },
-  "suggestedCrop": { "anchorX": 0-1, "anchorY": 0-1 },
-  "contentBounds": { "x": 0-1, "y": 0-1, "width": 0-1, "height": 0-1 }
+  "suggestedCrop": { "anchorX": 0-1, "anchorY": 0-1 }
 }
 
 Where:
-- contentBounds: The bounding box of the ACTUAL video content, excluding:
-  * Black bars (top, bottom, left, right)
-  * Overlay text/captions/subtitles that are not part of the original video
-  * Watermarks or logos
-  * UI elements or borders
-  * If the video fills the entire frame with no bars/overlays, use { x: 0, y: 0, width: 1, height: 1 }
-- facePosition: bounding box of the main face (normalized 0-1) within the full frame
+- facePosition: bounding box of the main face (normalized 0-1)
 - contentFocus: center of the most important visual content
 - suggestedCrop.anchorX: where to anchor horizontally (0=left, 0.5=center, 1=right)
 - suggestedCrop.anchorY: where to anchor vertically (0=top, 0.5=center, 1=bottom)
-
-IMPORTANT: Be precise about contentBounds. Look for:
-- Horizontal black bars (letterboxing) at top/bottom
-- Vertical black bars (pillarboxing) on left/right
-- Combined black bars (the actual video is a smaller rectangle inside)
-- Text overlays that should be excluded from the main content
 
 For talking head videos, anchorY should be low (0.1-0.3) to preserve the head.
 For action videos, center on the action.`
@@ -139,10 +116,6 @@ For action videos, center on the action.`
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         analysis = JSON.parse(jsonMatch[0]);
-        // Ensure contentBounds exists
-        if (!analysis.contentBounds) {
-          analysis.contentBounds = { x: 0, y: 0, width: 1, height: 1 };
-        }
       } else {
         throw new Error("No JSON found in response");
       }
@@ -153,12 +126,9 @@ For action videos, center on the action.`
         hasFace: true,
         facePosition: null,
         contentFocus: { x: 0.5, y: 0.3 },
-        suggestedCrop: { anchorX: 0.5, anchorY: 0.15 },
-        contentBounds: { x: 0, y: 0, width: 1, height: 1 }
+        suggestedCrop: { anchorX: 0.5, anchorY: 0.15 }
       };
     }
-
-    console.log("[analyze-frame] Analysis result:", JSON.stringify(analysis));
 
     return new Response(
       JSON.stringify(analysis),
@@ -174,7 +144,6 @@ For action videos, center on the action.`
         facePosition: null,
         contentFocus: { x: 0.5, y: 0.3 },
         suggestedCrop: { anchorX: 0.5, anchorY: 0.15 },
-        contentBounds: { x: 0, y: 0, width: 1, height: 1 },
         error: error instanceof Error ? error.message : "Unknown error"
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }

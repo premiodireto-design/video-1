@@ -16,13 +16,6 @@ export interface FrameAnalysis {
     anchorX: number;
     anchorY: number;
   };
-  // NEW: Detected actual video content area (excluding black bars, overlays, text)
-  contentBounds?: {
-    x: number; // 0-1 normalized left edge of actual video content
-    y: number; // 0-1 normalized top edge of actual video content
-    width: number; // 0-1 normalized width of actual video content
-    height: number; // 0-1 normalized height of actual video content
-  };
   error?: string;
 }
 
@@ -51,7 +44,6 @@ export async function captureVideoFrame(videoElement: HTMLVideoElement): Promise
 
 /**
  * Analyzes a video frame using AI to determine optimal cropping position
- * and detect the actual video content area (excluding black bars, overlays)
  */
 export async function analyzeVideoFrame(imageBase64: string): Promise<FrameAnalysis> {
   try {
@@ -80,13 +72,11 @@ export function getDefaultAnalysis(): FrameAnalysis {
     facePosition: null,
     contentFocus: { x: 0.5, y: 0.3 },
     suggestedCrop: { anchorX: 0.5, anchorY: 0.15 }, // Top-centered for talking heads
-    contentBounds: { x: 0, y: 0, width: 1, height: 1 }, // Full frame by default
   };
 }
 
 /**
  * Calculates video positioning based on AI analysis
- * Now also considers contentBounds to crop out black bars and overlays
  */
 export function calculateSmartPosition(
   videoWidth: number,
@@ -94,43 +84,24 @@ export function calculateSmartPosition(
   frameWidth: number,
   frameHeight: number,
   analysis: FrameAnalysis
-): { 
-  offsetX: number; 
-  offsetY: number; 
-  scale: number;
-  // Source crop coordinates (to extract only the actual content from video)
-  sourceX: number;
-  sourceY: number;
-  sourceWidth: number;
-  sourceHeight: number;
-} {
-  // Get content bounds (default to full frame if not provided)
-  const bounds = analysis.contentBounds || { x: 0, y: 0, width: 1, height: 1 };
-  
-  // Calculate the actual content area in pixels
-  const contentX = bounds.x * videoWidth;
-  const contentY = bounds.y * videoHeight;
-  const contentWidth = bounds.width * videoWidth;
-  const contentHeight = bounds.height * videoHeight;
-  
-  // Use the content dimensions for aspect ratio calculations
-  const contentAspect = contentWidth / contentHeight;
+): { offsetX: number; offsetY: number; scale: number } {
+  const videoAspect = videoWidth / videoHeight;
   const frameAspect = frameWidth / frameHeight;
   
-  // Calculate scale to cover the frame using ONLY the content area
+  // Calculate scale to cover the frame
   let scale: number;
-  if (contentAspect > frameAspect) {
-    // Content is wider than frame - scale by height
-    scale = frameHeight / contentHeight;
+  if (videoAspect > frameAspect) {
+    // Video is wider than frame - scale by height
+    scale = frameHeight / videoHeight;
   } else {
-    // Content is taller than frame - scale by width
-    scale = frameWidth / contentWidth;
+    // Video is taller than frame - scale by width
+    scale = frameWidth / videoWidth;
   }
   
-  const scaledWidth = contentWidth * scale;
-  const scaledHeight = contentHeight * scale;
+  const scaledWidth = videoWidth * scale;
+  const scaledHeight = videoHeight * scale;
   
-  // Calculate offsets based on AI analysis (for positioning within the content)
+  // Calculate offsets based on AI analysis
   const { anchorX, anchorY } = analysis.suggestedCrop;
   
   // Calculate how much overflow we have
@@ -138,6 +109,8 @@ export function calculateSmartPosition(
   const overflowY = scaledHeight - frameHeight;
   
   // Position based on anchor points
+  // anchorX=0 means keep left edge, anchorX=1 means keep right edge
+  // anchorY=0 means keep top edge, anchorY=1 means keep bottom edge
   const offsetX = -overflowX * anchorX;
   const offsetY = -overflowY * anchorY;
   
@@ -145,10 +118,5 @@ export function calculateSmartPosition(
     offsetX,
     offsetY,
     scale,
-    // Source coordinates for extracting content from original video
-    sourceX: contentX,
-    sourceY: contentY,
-    sourceWidth: contentWidth,
-    sourceHeight: contentHeight,
   };
 }

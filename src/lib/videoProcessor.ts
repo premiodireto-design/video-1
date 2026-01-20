@@ -127,12 +127,6 @@ export async function processVideo(
   let offsetY: number;
   let frameAnalysis: FrameAnalysis | null = null;
   
-  // Source crop coordinates (for extracting actual content from video)
-  let sourceX = 0;
-  let sourceY = 0;
-  let sourceWidth = vw;
-  let sourceHeight = vh;
-  
   // Use AI framing if enabled
   if (settings.useAiFraming && settings.fitMode === 'cover') {
     onProgress({
@@ -148,36 +142,17 @@ export async function processVideo(
       frameAnalysis = await analyzeVideoFrame(frameBase64);
       console.log('[VideoProcessor] AI frame analysis:', frameAnalysis);
       
-      // Calculate smart positioning based on AI analysis (now includes content bounds)
+      // Calculate smart positioning based on AI analysis
       const smartPos = calculateSmartPosition(vw, vh, ww, wh, frameAnalysis);
       scale = smartPos.scale;
       offsetX = smartPos.offsetX;
       offsetY = smartPos.offsetY;
       
-      // Use source crop coordinates to extract only the actual video content
-      sourceX = smartPos.sourceX;
-      sourceY = smartPos.sourceY;
-      sourceWidth = smartPos.sourceWidth;
-      sourceHeight = smartPos.sourceHeight;
-      
-      // Log if content bounds were detected
-      if (frameAnalysis.contentBounds && 
-          (frameAnalysis.contentBounds.x > 0.01 || 
-           frameAnalysis.contentBounds.y > 0.01 || 
-           frameAnalysis.contentBounds.width < 0.99 || 
-           frameAnalysis.contentBounds.height < 0.99)) {
-        console.log('[VideoProcessor] Content bounds detected - cropping out black bars/overlays:', frameAnalysis.contentBounds);
-      }
-      
       onProgress({
         videoId,
         progress: 15,
         stage: 'processing',
-        message: frameAnalysis.hasFace 
-          ? 'Rosto detectado! Posicionando...' 
-          : frameAnalysis.contentBounds && frameAnalysis.contentBounds.width < 1 
-            ? 'Área do vídeo detectada! Removendo bordas...'
-            : 'Conteúdo analisado! Posicionando...',
+        message: frameAnalysis.hasFace ? 'Rosto detectado! Posicionando...' : 'Conteúdo analisado! Posicionando...',
       });
     } catch (aiError) {
       console.warn('[VideoProcessor] AI analysis failed, using default:', aiError);
@@ -202,8 +177,8 @@ export async function processVideo(
     offsetY = (wh - scaledH) / 2;
   }
 
-  const scaledW = sourceWidth * scale;
-  const scaledH = sourceHeight * scale;
+  const scaledW = vw * scale;
+  const scaledH = vh * scale;
 
 
   // Create template mask (green area transparent)
@@ -343,17 +318,8 @@ export async function processVideo(
     
     // Draw video slightly larger to cover any potential edge gaps
     const videoExpand = 2;
-    
-    // Use 9-argument drawImage to crop from source when AI detected content bounds
-    // This extracts only the actual video content, excluding black bars/overlays
     ctx.drawImage(
-      video,
-      // Source rectangle (from original video)
-      sourceX,
-      sourceY,
-      sourceWidth,
-      sourceHeight,
-      // Destination rectangle (on canvas)
+      video, 
       x + offsetX - videoExpand, 
       y + offsetY - videoExpand, 
       scaledW + videoExpand * 2, 
