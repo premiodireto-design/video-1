@@ -257,10 +257,15 @@ export async function processVideo(
       audioContext = new AudioContext({ latencyHint: 'playback' });
       const source = audioContext.createMediaElementSource(video);
       const destination = audioContext.createMediaStreamDestination();
-      const gain = audioContext.createGain();
-      gain.gain.value = 0; // silent output
-      source.connect(gain);
-      gain.connect(destination);
+      
+      // IMPORTANT: Connect source DIRECTLY to destination for audio capture
+      // Also connect to a silent gain for the speakers
+      source.connect(destination);
+      
+      const silentGain = audioContext.createGain();
+      silentGain.gain.value = 0;
+      source.connect(silentGain);
+      silentGain.connect(audioContext.destination);
 
       const audioTrack = destination.stream.getAudioTracks()[0];
       if (audioTrack) {
@@ -468,8 +473,9 @@ export async function processVideo(
         await attachAudioTrack();
       } catch {}
 
-      // Start recording only after we tried attaching audio
-      recorder.start(100);
+      // Start recording with larger timeslice (1000ms) to reduce stuttering
+      // Smaller timeslices cause more frequent data handling which can cause lag
+      recorder.start(1000);
       scheduleFrames();
     }).catch((err2) => {
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
