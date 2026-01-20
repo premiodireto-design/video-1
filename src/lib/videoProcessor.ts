@@ -20,12 +20,13 @@ export interface ProcessingSettings {
   watermark?: string; // Optional @ handle for watermark
   useAiFraming?: boolean; // Use AI to detect faces and position video
   useCaptions?: boolean; // Use AI to generate animated captions
+  useDubbing?: boolean; // Use AI to translate and dub to Portuguese
 }
 
 export interface ProcessingProgress {
   videoId: string;
   progress: number;
-  stage: 'loading' | 'processing' | 'encoding' | 'transcribing' | 'done' | 'error';
+  stage: 'loading' | 'processing' | 'encoding' | 'transcribing' | 'translating' | 'dubbing' | 'done' | 'error';
   message: string;
 }
 
@@ -156,7 +157,8 @@ export async function processVideo(
   settings: ProcessingSettings,
   videoId: string,
   onProgress: ProgressCallback,
-  captionData?: CaptionData // Optional caption data for animated subtitles
+  captionData?: CaptionData, // Optional caption data for animated subtitles
+  dubbedAudioBlob?: Blob // Optional dubbed audio to replace original audio
 ): Promise<Blob> {
   onProgress({
     videoId,
@@ -334,7 +336,33 @@ export async function processVideo(
 
   // Audio capture helpers
   let audioContext: AudioContext | null = null;
+  let dubbedAudioElement: HTMLAudioElement | null = null;
+  
   const attachAudioTrack = async (): Promise<boolean> => {
+    // If we have dubbed audio, use that instead of the original
+    if (dubbedAudioBlob) {
+      try {
+        audioContext = new AudioContext({ latencyHint: 'playback' });
+        
+        // Create audio element for dubbed audio
+        dubbedAudioElement = new Audio(URL.createObjectURL(dubbedAudioBlob));
+        dubbedAudioElement.volume = 1;
+        
+        const dubbedSource = audioContext.createMediaElementSource(dubbedAudioElement);
+        const destination = audioContext.createMediaStreamDestination();
+        dubbedSource.connect(destination);
+        
+        const audioTrack = destination.stream.getAudioTracks()[0];
+        if (audioTrack) {
+          combinedStream.addTrack(audioTrack);
+          console.log('[VideoProcessor] Using dubbed audio track');
+          return true;
+        }
+      } catch (e) {
+        console.warn('[VideoProcessor] Dubbed audio setup failed:', e);
+      }
+    }
+    
     // 1) Best option: captureStream() from the video element (usually most reliable)
     const anyVideo = video as any;
     const captureFn = (anyVideo.captureStream || anyVideo.mozCaptureStream)?.bind(video);
@@ -354,7 +382,9 @@ export async function processVideo(
 
     // 2) Fallback: AudioContext -> MediaStreamDestination
     try {
-      audioContext = new AudioContext({ latencyHint: 'playback' });
+      if (!audioContext) {
+        audioContext = new AudioContext({ latencyHint: 'playback' });
+      }
       const source = audioContext.createMediaElementSource(video);
       const destination = audioContext.createMediaStreamDestination();
       const gain = audioContext.createGain();
@@ -512,6 +542,12 @@ export async function processVideo(
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
 
+      // Clean up dubbed audio if used
+      if (dubbedAudioElement) {
+        dubbedAudioElement.pause();
+        URL.revokeObjectURL(dubbedAudioElement.src);
+      }
+
       try {
         audioContext?.close();
       } catch {}
@@ -542,6 +578,10 @@ export async function processVideo(
     recorder.onerror = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
+      if (dubbedAudioElement) {
+        dubbedAudioElement.pause();
+        URL.revokeObjectURL(dubbedAudioElement.src);
+      }
       try {
         audioContext?.close();
       } catch {}
@@ -551,6 +591,10 @@ export async function processVideo(
     video.onerror = () => {
       stopRecording();
       cancelAnimationFrame(animationId);
+      if (dubbedAudioElement) {
+        dubbedAudioElement.pause();
+        URL.revokeObjectURL(dubbedAudioElement.src);
+      }
       try {
         audioContext?.close();
       } catch {}
@@ -572,6 +616,17 @@ export async function processVideo(
       try {
         await attachAudioTrack();
       } catch {}
+
+      // If using dubbed audio, start it in sync with the video
+      if (dubbedAudioElement) {
+        dubbedAudioElement.currentTime = 0;
+        dubbedAudioElement.volume = 0.001; // Near silent for capture only
+        try {
+          await dubbedAudioElement.play();
+        } catch (e) {
+          console.warn('[VideoProcessor] Failed to play dubbed audio:', e);
+        }
+      }
 
       // Start recording only after we tried attaching audio
       recorder.start(100);

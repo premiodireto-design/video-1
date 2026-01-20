@@ -15,6 +15,7 @@ import {
 import { convertWebMToMP4, loadFFmpegConverter } from '@/lib/videoConverter';
 import { type GreenArea } from '@/lib/greenDetection';
 import { transcribeVideo } from '@/lib/transcriptionService';
+import { dubVideo, textToSpeech, loadPuterSDK } from '@/lib/dubbingService';
 
 export default function Dashboard() {
   const [templateFile, setTemplateFile] = useState<File | null>(null);
@@ -28,6 +29,7 @@ export default function Dashboard() {
     watermark: '',
     useAiFraming: true, // Enabled by default
     useCaptions: false, // Disabled by default (user can enable)
+    useDubbing: false, // Disabled by default (user can enable)
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
@@ -79,9 +81,11 @@ export default function Dashboard() {
         ));
 
         try {
-          // Transcribe audio if captions are enabled
+          // Transcribe audio if captions OR dubbing is enabled
           let captionData: CaptionData | undefined;
-          if (settings.useCaptions) {
+          let dubbedAudioBlob: Blob | undefined;
+          
+          if (settings.useCaptions || settings.useDubbing) {
             updateVideoProgress({
               videoId: video.id,
               progress: 2,
@@ -92,6 +96,35 @@ export default function Dashboard() {
             try {
               captionData = await transcribeVideo(video.file);
               console.log('[Dashboard] Transcription result:', captionData?.text?.substring(0, 50));
+              
+              // If dubbing is enabled, translate and generate speech
+              if (settings.useDubbing && captionData && captionData.text) {
+                updateVideoProgress({
+                  videoId: video.id,
+                  progress: 10,
+                  stage: 'translating',
+                  message: 'Traduzindo para português...',
+                });
+                
+                try {
+                  // Load Puter SDK first
+                  await loadPuterSDK();
+                  
+                  const dubbingResult = await dubVideo(captionData, 'pt-BR');
+                  captionData = dubbingResult.translatedCaptions; // Use translated captions
+                  dubbedAudioBlob = dubbingResult.dubbedAudioBlob;
+                  console.log('[Dashboard] Dubbing complete, audio size:', dubbedAudioBlob?.size);
+                  
+                  updateVideoProgress({
+                    videoId: video.id,
+                    progress: 20,
+                    stage: 'dubbing',
+                    message: 'Áudio dublado gerado!',
+                  });
+                } catch (dubError) {
+                  console.warn('[Dashboard] Dubbing failed, continuing without dubbing:', dubError);
+                }
+              }
             } catch (transcribeError) {
               console.warn('[Dashboard] Transcription failed, continuing without captions:', transcribeError);
             }
@@ -104,7 +137,8 @@ export default function Dashboard() {
             settings,
             video.id,
             updateVideoProgress,
-            captionData // Pass caption data if available
+            captionData, // Pass caption data if available
+            dubbedAudioBlob // Pass dubbed audio if available
           );
 
           // Update with output
