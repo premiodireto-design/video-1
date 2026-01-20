@@ -10,7 +10,11 @@
     "downloads"
   ],
   "host_permissions": [
-    "*://*.tiktok.com/*"
+    "*://*.tiktok.com/*",
+    "*://*.tiktokcdn.com/*",
+    "*://tikwm.com/*",
+    "*://*.tikwm.com/*",
+    "*://corsproxy.io/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -38,8 +42,14 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["dashboard.html", "dashboard.js", "dashboard.css"],
+      "resources": [
+        "dashboard.html",
+        "dashboard.js",
+        "dashboard.css",
+        "vendor/jszip.min.js"
+      ],
       "matches": ["*://*.tiktok.com/*"]
     }
   ]
 }
+
