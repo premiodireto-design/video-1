@@ -26,8 +26,10 @@ export default function AdvancedDashboard() {
     useAiFraming: true,
     enableCaptions: false,
     captionStyle: 'bottom',
+    captionLanguage: 'pt-BR',
     enableDubbing: false,
     dubbingLanguage: 'pt-BR',
+    autoDubForeignOnly: true,
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);

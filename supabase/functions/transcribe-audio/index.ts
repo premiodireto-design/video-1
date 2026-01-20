@@ -25,24 +25,39 @@ serve(async (req) => {
     if (!LOVABLE_API_KEY) {
       console.error("LOVABLE_API_KEY not configured");
       return new Response(
-        JSON.stringify({ text: "", words: [] }),
+        JSON.stringify({ text: "", words: [], detectedLanguage: "unknown" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Use Gemini for transcription with word-level timestamps
-    const prompt = `Transcribe this audio to text with word-level timestamps. 
+    // Use Gemini for transcription with word-level timestamps and language detection
+    const prompt = `Transcribe this audio to text with word-level timestamps and detect the language.
 Return ONLY a valid JSON object in this exact format:
 {
   "text": "full transcription text here",
   "words": [
-    {"word": "word1", "start": 0.0, "end": 0.5},
-    {"word": "word2", "start": 0.5, "end": 1.0}
-  ]
+    {"word": "word1", "start": 0.0, "end": 0.8},
+    {"word": "word2", "start": 0.8, "end": 1.6}
+  ],
+  "detectedLanguage": "en-US"
 }
 
-The audio is base64 encoded WAV. Estimate timestamps based on typical speech patterns (average 150 words per minute).
-If you cannot transcribe, return: {"text": "", "words": []}`;
+IMPORTANT TIMING RULES:
+- Average speaking rate is 120-150 words per minute (about 0.4-0.5 seconds per word)
+- Short words (1-4 chars): 0.3-0.5 seconds
+- Medium words (5-8 chars): 0.5-0.7 seconds  
+- Long words (9+ chars): 0.7-1.0 seconds
+- Add small pauses (0.1-0.3s) between sentences
+
+For detectedLanguage, use standard locale codes:
+- "pt-BR" for Brazilian Portuguese
+- "pt-PT" for European Portuguese
+- "en-US" for American English
+- "en-GB" for British English
+- "es-ES" for Spanish
+- etc.
+
+If you cannot transcribe, return: {"text": "", "words": [], "detectedLanguage": "unknown"}`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -60,7 +75,7 @@ If you cannot transcribe, return: {"text": "", "words": []}`;
               {
                 type: "image_url",
                 image_url: {
-                  url: `data:audio/wav;base64,${audioBase64.substring(0, 50000)}`, // Limit size
+                  url: `data:audio/wav;base64,${audioBase64.substring(0, 50000)}`,
                 },
               },
             ],
@@ -75,21 +90,21 @@ If you cannot transcribe, return: {"text": "", "words": []}`;
       
       if (status === 429) {
         return new Response(
-          JSON.stringify({ error: "Rate limit exceeded", text: "", words: [] }),
+          JSON.stringify({ error: "Rate limit exceeded", text: "", words: [], detectedLanguage: "unknown" }),
           { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       
       if (status === 402) {
         return new Response(
-          JSON.stringify({ error: "Credits exhausted", text: "", words: [] }),
+          JSON.stringify({ error: "Credits exhausted", text: "", words: [], detectedLanguage: "unknown" }),
           { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
       console.error("AI Gateway error:", status);
       return new Response(
-        JSON.stringify({ text: "", words: [] }),
+        JSON.stringify({ text: "", words: [], detectedLanguage: "unknown" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -99,14 +114,15 @@ If you cannot transcribe, return: {"text": "", "words": []}`;
 
     // Parse JSON from response
     try {
-      // Extract JSON from response (might be wrapped in markdown)
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
+        console.log("[Transcribe] Detected language:", parsed.detectedLanguage);
         return new Response(
           JSON.stringify({
             text: parsed.text || "",
             words: parsed.words || [],
+            detectedLanguage: parsed.detectedLanguage || "unknown",
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
@@ -116,13 +132,13 @@ If you cannot transcribe, return: {"text": "", "words": []}`;
     }
 
     return new Response(
-      JSON.stringify({ text: "", words: [] }),
+      JSON.stringify({ text: "", words: [], detectedLanguage: "unknown" }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
     console.error("Transcription error:", error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error", text: "", words: [] }),
+      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error", text: "", words: [], detectedLanguage: "unknown" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
