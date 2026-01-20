@@ -3,7 +3,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Input } from '@/components/ui/input';
-import { Settings, Crop, Square, Volume2, Sparkles, Scissors, AtSign, Brain, Subtitles, Languages } from 'lucide-react';
+import { Settings, Crop, Square, Volume2, Sparkles, Scissors, AtSign, Brain, Subtitles } from 'lucide-react';
 import type { ProcessingSettings as ProcessingSettingsType } from '@/lib/videoProcessor';
 
 interface ProcessingSettingsProps {
@@ -171,28 +171,6 @@ export function ProcessingSettings({ settings, onSettingsChange, disabled }: Pro
               checked={settings.useCaptions ?? false}
               onCheckedChange={(checked) => 
                 onSettingsChange({ ...settings, useCaptions: checked })
-              }
-              disabled={disabled}
-            />
-          </div>
-
-          <div className="flex items-center justify-between p-3 rounded-lg border bg-gradient-to-r from-green-500/10 to-teal-500/10 border-green-500/30">
-            <div className="flex items-center gap-3">
-              <Languages className="h-4 w-4 text-green-500" />
-              <div>
-                <Label htmlFor="ai-dubbing" className="font-medium cursor-pointer">
-                  Dublagem PT-BR com IA ✨
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  Traduz e dubla o vídeo para português (experimental)
-                </p>
-              </div>
-            </div>
-            <Switch
-              id="ai-dubbing"
-              checked={settings.useDubbing ?? false}
-              onCheckedChange={(checked) => 
-                onSettingsChange({ ...settings, useDubbing: checked })
               }
               disabled={disabled}
             />
