@@ -161,18 +161,21 @@ async function transcribeAudio(audioBase64: string, videoId: string): Promise<Tr
 }
 
 /**
- * Generate dubbed audio using TTS
+ * Generate dubbed audio using TTS (StreamElements - FREE API)
  */
 async function generateDubbedAudio(
   transcription: Transcription,
   language: string,
   videoDuration: number
-): Promise<Blob | null> {
+): Promise<{ audioBlob: Blob; translatedText: string } | null> {
   if (!transcription.text || transcription.text.length === 0) {
+    console.log('[AdvancedProcessor] No text to dub');
     return null;
   }
 
   try {
+    console.log('[AdvancedProcessor] Starting dubbing process...');
+    
     // First translate the text
     const { data: translationData, error: translationError } = await supabase.functions.invoke('generate-dubbing', {
       body: { text: transcription.text, targetLanguage: language },
@@ -183,13 +186,38 @@ async function generateDubbedAudio(
       return null;
     }
 
-    // Use Web Speech API for TTS as fallback
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      // For now, return null - TTS would need more complex implementation
-      console.log('[AdvancedProcessor] TTS translation ready:', translationData.translatedText);
+    console.log('[AdvancedProcessor] Text translated:', translationData.translatedText.substring(0, 100) + '...');
+
+    // Generate TTS audio using our edge function (StreamElements - FREE!)
+    const { data: ttsData, error: ttsError } = await supabase.functions.invoke('generate-tts', {
+      body: { 
+        text: translationData.translatedText, 
+        targetLanguage: language,
+        voiceGender: 'male' // Use male voice for TikTok style
+      },
+    });
+
+    if (ttsError || !ttsData?.audioBase64) {
+      console.warn('[AdvancedProcessor] TTS failed:', ttsError);
+      return null;
     }
 
-    return null;
+    console.log('[AdvancedProcessor] TTS audio generated, voice:', ttsData.voice);
+
+    // Convert base64 to Blob
+    const binaryString = atob(ttsData.audioBase64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    const audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
+
+    console.log('[AdvancedProcessor] Dubbed audio blob size:', audioBlob.size);
+
+    return { 
+      audioBlob, 
+      translatedText: translationData.translatedText 
+    };
   } catch (e) {
     console.warn('[AdvancedProcessor] Dubbing failed:', e);
     return null;
@@ -322,12 +350,18 @@ export async function processAdvancedVideo(
         }
       }
 
-      // Dubbing
-      let dubbedAudio: Blob | null = null;
+      // Dubbing - get dubbed audio blob
+      let dubbedAudioBlob: Blob | null = null;
+      let dubbedTranslation: string = '';
       
       if (settings.enableDubbing && transcription.text) {
         onProgress({ videoId, progress: 15, stage: 'dubbing', message: 'Gerando dublagem...' });
-        dubbedAudio = await generateDubbedAudio(transcription, settings.dubbingLanguage, duration);
+        const dubbingResult = await generateDubbedAudio(transcription, settings.dubbingLanguage, duration);
+        if (dubbingResult) {
+          dubbedAudioBlob = dubbingResult.audioBlob;
+          dubbedTranslation = dubbingResult.translatedText;
+          console.log('[AdvancedProcessor] Dubbed audio ready, translation:', dubbedTranslation.substring(0, 50) + '...');
+        }
       }
 
       // AI Framing analysis
@@ -368,12 +402,13 @@ export async function processAdvancedVideo(
       
       const stream = canvas.captureStream(fps);
       
-      // Add audio track
-      if (dubbedAudio) {
-        // Use dubbed audio
+      // Add audio track - use dubbed audio OR original (but not both!)
+      if (dubbedAudioBlob) {
+        // Use ONLY dubbed audio (remove original voice)
+        console.log('[AdvancedProcessor] Using dubbed audio, removing original voice...');
         try {
           const audioContext = new AudioContext();
-          const arrayBuffer = await dubbedAudio.arrayBuffer();
+          const arrayBuffer = await dubbedAudioBlob.arrayBuffer();
           const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
           const source = audioContext.createBufferSource();
           source.buffer = audioBuffer;
@@ -381,17 +416,30 @@ export async function processAdvancedVideo(
           source.connect(dest);
           source.start();
           dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
+          console.log('[AdvancedProcessor] Dubbed audio track added successfully');
         } catch (e) {
           console.warn('[AdvancedProcessor] Failed to add dubbed audio:', e);
+          // Fallback to original audio if dubbing fails
+          try {
+            video.muted = false;
+            const audioCtx = new AudioContext();
+            const sourceNode = audioCtx.createMediaElementSource(video);
+            const dest = audioCtx.createMediaStreamDestination();
+            sourceNode.connect(dest);
+            dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
+          } catch (e2) {
+            console.warn('[AdvancedProcessor] Fallback audio also failed:', e2);
+          }
         }
       } else {
-        // Use original audio
+        // Use original audio (no dubbing)
+        console.log('[AdvancedProcessor] Using original audio...');
         try {
+          video.muted = false;
           const audioCtx = new AudioContext();
           const sourceNode = audioCtx.createMediaElementSource(video);
           const dest = audioCtx.createMediaStreamDestination();
           sourceNode.connect(dest);
-          sourceNode.connect(audioCtx.destination);
           dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
         } catch (e) {
           console.warn('[AdvancedProcessor] Failed to add original audio:', e);
