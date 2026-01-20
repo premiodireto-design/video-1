@@ -892,7 +892,9 @@ function applyFiltersAndSort() {
     ensureStatsForVideos(extractedVideos);
   }
 
-  const valueForFilter = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : 0);
+  const isKnownNumber = (n) => typeof n === 'number' && Number.isFinite(n);
+
+  const valueForFilter = (n) => (isKnownNumber(n) ? n : 0);
 
   const valueForSort = (v) => {
     switch (currentSort.field) {
@@ -900,9 +902,9 @@ function applyFiltersAndSort() {
         return valueForFilter(v.views);
       case 'likes':
         // likes can be unknown (null) until we fetch; keep them at the end instead of "0" misleading ordering
-        return typeof v.likes === 'number' && Number.isFinite(v.likes) ? v.likes : -1;
+        return isKnownNumber(v.likes) ? v.likes : -1;
       case 'comments':
-        return typeof v.comments === 'number' && Number.isFinite(v.comments) ? v.comments : -1;
+        return isKnownNumber(v.comments) ? v.comments : -1;
       case 'date':
         return v.createTime ? new Date(v.createTime).getTime() : 0;
       default:
@@ -910,18 +912,24 @@ function applyFiltersAndSort() {
     }
   };
 
+  const passesMaybeUnknown = (value, min, max) => {
+    // When likes/comments are still loading, we DO NOT exclude items prematurely.
+    // They remain visible and will be filtered again as soon as stats arrive.
+    if (!isKnownNumber(value)) return true;
+    if (value < min) return false;
+    if (value > max) return false;
+    return true;
+  };
+
   // Filter videos
   const filtered = extractedVideos.filter((v) => {
     const views = valueForFilter(v.views);
-    const likes = valueForFilter(v.likes);
-    const comments = valueForFilter(v.comments);
-
     if (views < currentFilters.minViews) return false;
     if (views > currentFilters.maxViews) return false;
-    if (likes < currentFilters.minLikes) return false;
-    if (likes > currentFilters.maxLikes) return false;
-    if (comments < currentFilters.minComments) return false;
-    if (comments > currentFilters.maxComments) return false;
+
+    if (!passesMaybeUnknown(v.likes, currentFilters.minLikes, currentFilters.maxLikes)) return false;
+    if (!passesMaybeUnknown(v.comments, currentFilters.minComments, currentFilters.maxComments)) return false;
+
     return true;
   });
 
@@ -1425,14 +1433,21 @@ async function downloadVideosAsZip() {
     try {
       addLog(`[${i + 1}/${orderedVideos.length}] Baixando ${video.id}...`);
 
-      // Prefer internal CDN url (tiktokcdn). Fallback only if necessary.
-      const cdnUrl = (video.downloadUrl && String(video.downloadUrl).includes('tiktokcdn.com'))
+      // Prefer internal CDN url (tiktokcdn). If direct fetch is blocked by CORS,
+      // we still keep the *raw* v16m link for CSV, but download via proxy.
+      const cdnUrlRaw = (video.downloadUrl && String(video.downloadUrl).includes('tiktokcdn.com'))
         ? video.downloadUrl
         : (tatDownloadUrlCache.get(video.id) || null);
 
+      const proxyFor = (u) => (u ? `https://corsproxy.io/?${encodeURIComponent(u)}` : null);
+
+      // Order matters: try v16m (raw), then v16m (proxy), then fallbacks.
       const downloadUrls = [
-        cdnUrl,
+        cdnUrlRaw,
+        proxyFor(cdnUrlRaw),
+        // sometimes TikTok gives a non-cdn downloadUrl; try it too
         video.downloadUrl,
+        proxyFor(video.downloadUrl),
         `https://tikwm.com/video/media/hdplay/${video.id}.mp4`,
         `https://www.tikwm.com/video/media/play/${video.id}.mp4`,
       ].filter(Boolean);
@@ -1444,19 +1459,21 @@ async function downloadVideosAsZip() {
 
         try {
           const response = await fetch(url, {
-            mode: 'cors',
-            credentials: url.includes('tiktok.com') ? 'include' : 'omit',
+            // keep default mode; proxy endpoints are CORS-friendly
+            credentials: 'omit',
             headers: {
               Accept: 'video/mp4,video/*,*/*',
             },
           });
 
-          if (response.ok) {
-            blob = await response.blob();
-            if (blob.size > 10000) {
-              addLog(`  ✓ Sucesso via ${new URL(url).hostname}`, 'success');
-              break;
-            }
+          if (!response.ok) continue;
+
+          const b = await response.blob();
+          // Opaque/blocked responses often come back with 0 bytes.
+          if (b && b.size > 10000) {
+            blob = b;
+            addLog(`  ✓ Sucesso via ${new URL(url).hostname}`, 'success');
+            break;
           }
         } catch (e) {
           console.log('Download attempt failed:', url, e);
@@ -1469,31 +1486,8 @@ async function downloadVideosAsZip() {
         zip.file(filename, blob);
         successCount++;
       } else {
-        addLog(`  ✗ Falhou - tentando proxy...`, 'error');
-
-        // Try with a CORS proxy as last resort
-        try {
-          const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(
-            cdnUrl || `https://tikwm.com/video/media/hdplay/${video.id}.mp4`
-          )}`;
-          const response = await fetch(proxyUrl);
-          if (response.ok) {
-            blob = await response.blob();
-            if (blob.size > 10000) {
-              const filename = `${String(i + 1).padStart(3, '0')}_${video.id}.mp4`;
-              zip.file(filename, blob);
-              successCount++;
-              addLog(`  ✓ Sucesso via proxy`, 'success');
-            } else {
-              failCount++;
-            }
-          } else {
-            failCount++;
-          }
-        } catch (e) {
-          failCount++;
-          addLog(`  ✗ Não foi possível baixar`, 'error');
-        }
+        failCount++;
+        addLog(`  ✗ Não foi possível baixar (bloqueio / link inválido)`, 'error');
       }
     } catch (e) {
       console.error('Download failed for video:', video.id, e);
