@@ -296,7 +296,12 @@ export default function Dashboard() {
         description: 'Finalizando o arquivo',
       });
 
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      // For large batches, streaming + no-compression is MUCH more stable and avoids memory spikes.
+      const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        streamFiles: true,
+        compression: 'STORE',
+      });
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = url;
@@ -361,7 +366,11 @@ export default function Dashboard() {
         zip.file(filename, video.outputBlob);
       }
 
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        streamFiles: true,
+        compression: 'STORE',
+      });
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = url;
