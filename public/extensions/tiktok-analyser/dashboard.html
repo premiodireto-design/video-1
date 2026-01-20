@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TikTok Analyser - Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-icon">📊</span>
+          <span class="logo-text">TikTok Analyser</span>
+        </div>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-item active" data-view="library">
+          <span class="nav-icon">📚</span>
+          <span class="nav-text">Biblioteca</span>
+        </a>
+        <a href="#" class="nav-item" data-view="favorites">
+          <span class="nav-icon">⭐</span>
+          <span class="nav-text">Favoritos</span>
+        </a>
+        <a href="#" class="nav-item" data-view="tags">
+          <span class="nav-icon">🏷️</span>
+          <span class="nav-text">Tags</span>
+        </a>
+        <a href="#" class="nav-item" data-view="exports">
+          <span class="nav-icon">📤</span>
+          <span class="nav-text">Exportações</span>
+        </a>
+      </nav>
+      
+      <div class="sidebar-section">
+        <h3 class="section-title">Perfis Salvos</h3>
+        <div class="profiles-list" id="profiles-list">
+          <div class="empty-state">
+            <p>Nenhum perfil salvo</p>
+            <small>Visite um perfil TikTok e use a extensão</small>
+          </div>
+        </div>
+      </div>
+      
+      <div class="sidebar-footer">
+        <a href="#" class="nav-item" data-view="settings">
+          <span class="nav-icon">⚙️</span>
+          <span class="nav-text">Configurações</span>
+        </a>
+      </div>
+    </aside>
+    
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Top Bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 class="page-title" id="page-title">Biblioteca</h1>
+          <span class="video-count" id="video-count">0 vídeos</span>
+        </div>
+        
+        <div class="topbar-center">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" class="search-input" id="search-input" placeholder="Buscar por descrição, autor ou tags...">
+          </div>
+        </div>
+        
+        <div class="topbar-right">
+          <div class="filter-group">
+            <button class="filter-btn" id="filter-btn">
+              <span>🎚️</span>
+              <span>Filtros</span>
+            </button>
+            <div class="sort-dropdown">
+              <button class="sort-btn" id="sort-btn">
+                <span>Ordenar: </span>
+                <span id="sort-label">Views</span>
+                <span>▼</span>
+              </button>
+              <div class="sort-menu" id="sort-menu">
+                <button class="sort-option active" data-sort="views-desc">👀 Views (maior)</button>
+                <button class="sort-option" data-sort="views-asc">👀 Views (menor)</button>
+                <button class="sort-option" data-sort="likes-desc">❤️ Likes (maior)</button>
+                <button class="sort-option" data-sort="likes-asc">❤️ Likes (menor)</button>
+                <button class="sort-option" data-sort="comments-desc">💬 Comentários (maior)</button>
+                <button class="sort-option" data-sort="date-desc">📅 Data (recente)</button>
+                <button class="sort-option" data-sort="date-asc">📅 Data (antiga)</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+      
+      <!-- Filter Panel -->
+      <div class="filter-panel" id="filter-panel">
+        <div class="filter-row">
+          <div class="filter-item">
+            <label>Views mínimas</label>
+            <select id="filter-min-views">
+              <option value="0">Qualquer</option>
+              <option value="1000">1K+</option>
+              <option value="10000">10K+</option>
+              <option value="100000">100K+</option>
+              <option value="1000000">1M+</option>
+            </select>
+          </div>
+          <div class="filter-item">
+            <label>Views máximas</label>
+            <select id="filter-max-views">
+              <option value="999999999999">Qualquer</option>
+              <option value="10000">até 10K</option>
+              <option value="100000">até 100K</option>
+              <option value="1000000">até 1M</option>
+            </select>
+          </div>
+          <div class="filter-item">
+            <label>Likes mínimos</label>
+            <select id="filter-min-likes">
+              <option value="0">Qualquer</option>
+              <option value="100">100+</option>
+              <option value="1000">1K+</option>
+              <option value="10000">10K+</option>
+              <option value="100000">100K+</option>
+            </select>
+          </div>
+          <div class="filter-item">
+            <label>Status</label>
+            <select id="filter-status">
+              <option value="all">Todos</option>
+              <option value="available">Baixáveis</option>
+              <option value="selected">Selecionados</option>
+            </select>
+          </div>
+          <button class="filter-clear" id="filter-clear">Limpar Filtros</button>
+        </div>
+      </div>
+      
+      <!-- Stats Bar -->
+      <div class="stats-bar">
+        <div class="stat-item">
+          <span class="stat-value" id="stat-total">0</span>
+          <span class="stat-label">Total</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-selected">0</span>
+          <span class="stat-label">Selecionados</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-views">0</span>
+          <span class="stat-label">Views</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-likes">0</span>
+          <span class="stat-label">Likes</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-comments">0</span>
+          <span class="stat-label">Comentários</span>
+        </div>
+      </div>
+      
+      <!-- Action Bar -->
+      <div class="action-bar">
+        <div class="action-left">
+          <button class="action-btn" id="select-all-btn">
+            <span>☑️</span>
+            <span>Selecionar Todos</span>
+          </button>
+          <button class="action-btn" id="select-top-btn">
+            <span>🏆</span>
+            <span>Top 50</span>
+          </button>
+          <button class="action-btn" id="clear-selection-btn">
+            <span>✖️</span>
+            <span>Limpar Seleção</span>
+          </button>
+        </div>
+        <div class="action-right">
+          <button class="action-btn primary" id="download-btn" disabled>
+            <span>📥</span>
+            <span>Baixar Selecionados</span>
+          </button>
+          <button class="action-btn" id="export-csv-btn">
+            <span>📋</span>
+            <span>CSV</span>
+          </button>
+          <button class="action-btn" id="export-json-btn">
+            <span>📄</span>
+            <span>JSON</span>
+          </button>
+        </div>
+      </div>
+      
+      <!-- Video Grid -->
+      <div class="video-grid" id="video-grid">
+        <div class="empty-state large">
+          <div class="empty-icon">📹</div>
+          <h2>Nenhum vídeo carregado</h2>
+          <p>Acesse um perfil do TikTok e use a extensão para carregar os vídeos aqui.</p>
+        </div>
+      </div>
+      
+      <!-- Download Progress Modal -->
+      <div class="modal" id="download-modal">
+        <div class="modal-content">
+          <h2>📥 Baixando Vídeos</h2>
+          <div class="progress-container">
+            <div class="progress-bar">
+              <div class="progress-fill" id="download-progress"></div>
+            </div>
+            <div class="progress-text" id="download-text">0 / 0 vídeos</div>
+          </div>
+          <div class="download-list" id="download-list"></div>
+          <div class="modal-actions">
+            <button class="action-btn" id="cancel-download-btn">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  
+  <script src="dashboard.js"></script>
+</body>
+</html>
