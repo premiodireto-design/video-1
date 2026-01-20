@@ -8,7 +8,6 @@ export interface ProcessingSettings {
   removeBlackBars: boolean;
   watermark?: string; // Optional @ handle for watermark
   useAiFraming?: boolean; // Use AI to detect faces and position video
-  customContentBounds?: { x: number; y: number; width: number; height: number } | null; // Manual content bounds override
 }
 
 export interface ProcessingProgress {
@@ -136,89 +135,58 @@ export async function processVideo(
   
   // Use AI framing if enabled
   if (settings.useAiFraming && settings.fitMode === 'cover') {
-    // Check if we have custom content bounds from user (manual adjustment)
-    if (settings.customContentBounds) {
-      console.log('[VideoProcessor] Using custom content bounds from user:', settings.customContentBounds);
+    onProgress({
+      videoId,
+      progress: 12,
+      stage: 'processing',
+      message: 'Analisando vídeo com IA...',
+    });
+    
+    try {
+      // Capture first frame for analysis
+      const frameBase64 = await captureVideoFrame(video);
+      frameAnalysis = await analyzeVideoFrame(frameBase64);
+      console.log('[VideoProcessor] AI frame analysis:', frameAnalysis);
       
-      // Create a fake analysis with custom bounds
-      frameAnalysis = {
-        hasFace: true,
-        facePosition: null,
-        contentFocus: { x: 0.5, y: 0.3 },
-        suggestedCrop: { anchorX: 0.5, anchorY: 0.15 },
-        contentBounds: settings.customContentBounds,
-      };
-      
+      // Calculate smart positioning based on AI analysis (now includes content bounds)
       const smartPos = calculateSmartPosition(vw, vh, ww, wh, frameAnalysis);
       scale = smartPos.scale;
       offsetX = smartPos.offsetX;
       offsetY = smartPos.offsetY;
+      
+      // Use source crop coordinates to extract only the actual video content
       sourceX = smartPos.sourceX;
       sourceY = smartPos.sourceY;
       sourceWidth = smartPos.sourceWidth;
       sourceHeight = smartPos.sourceHeight;
       
+      // Log if content bounds were detected
+      if (frameAnalysis.contentBounds && 
+          (frameAnalysis.contentBounds.x > 0.01 || 
+           frameAnalysis.contentBounds.y > 0.01 || 
+           frameAnalysis.contentBounds.width < 0.99 || 
+           frameAnalysis.contentBounds.height < 0.99)) {
+        console.log('[VideoProcessor] Content bounds detected - cropping out black bars/overlays:', frameAnalysis.contentBounds);
+      }
+      
       onProgress({
         videoId,
         progress: 15,
         stage: 'processing',
-        message: 'Usando enquadramento manual...',
+        message: frameAnalysis.hasFace 
+          ? 'Rosto detectado! Posicionando...' 
+          : frameAnalysis.contentBounds && frameAnalysis.contentBounds.width < 1 
+            ? 'Área do vídeo detectada! Removendo bordas...'
+            : 'Conteúdo analisado! Posicionando...',
       });
-    } else {
-      // Use AI analysis
-      onProgress({
-        videoId,
-        progress: 12,
-        stage: 'processing',
-        message: 'Analisando vídeo com IA...',
-      });
-      
-      try {
-        // Capture first frame for analysis
-        const frameBase64 = await captureVideoFrame(video);
-        frameAnalysis = await analyzeVideoFrame(frameBase64);
-        console.log('[VideoProcessor] AI frame analysis:', frameAnalysis);
-        
-        // Calculate smart positioning based on AI analysis (now includes content bounds)
-        const smartPos = calculateSmartPosition(vw, vh, ww, wh, frameAnalysis);
-        scale = smartPos.scale;
-        offsetX = smartPos.offsetX;
-        offsetY = smartPos.offsetY;
-        
-        // Use source crop coordinates to extract only the actual video content
-        sourceX = smartPos.sourceX;
-        sourceY = smartPos.sourceY;
-        sourceWidth = smartPos.sourceWidth;
-        sourceHeight = smartPos.sourceHeight;
-        
-        // Log if content bounds were detected
-        if (frameAnalysis.contentBounds && 
-            (frameAnalysis.contentBounds.x > 0.01 || 
-             frameAnalysis.contentBounds.y > 0.01 || 
-             frameAnalysis.contentBounds.width < 0.99 || 
-             frameAnalysis.contentBounds.height < 0.99)) {
-          console.log('[VideoProcessor] Content bounds detected - cropping out black bars/overlays:', frameAnalysis.contentBounds);
-        }
-        
-        onProgress({
-          videoId,
-          progress: 15,
-          stage: 'processing',
-          message: frameAnalysis.hasFace 
-            ? 'Rosto detectado! Posicionando...' 
-            : frameAnalysis.contentBounds && frameAnalysis.contentBounds.width < 1 
-              ? 'Área do vídeo detectada! Removendo bordas...'
-              : 'Conteúdo analisado! Posicionando...',
-        });
-      } catch (aiError) {
-        console.warn('[VideoProcessor] AI analysis failed, using default:', aiError);
-        // Fallback to default cover mode
-        scale = Math.max(ww / vw, wh / vh);
-        const scaledW = vw * scale;
-        const scaledH = vh * scale;
-        offsetX = (ww - scaledW) / 2;
-        offsetY = 0; // Top-aligned
-      }
+    } catch (aiError) {
+      console.warn('[VideoProcessor] AI analysis failed, using default:', aiError);
+      // Fallback to default cover mode
+      scale = Math.max(ww / vw, wh / vh);
+      const scaledW = vw * scale;
+      const scaledH = vh * scale;
+      offsetX = (ww - scaledW) / 2;
+      offsetY = 0; // Top-aligned
     }
   } else if (settings.fitMode === 'cover') {
     scale = Math.max(ww / vw, wh / vh);

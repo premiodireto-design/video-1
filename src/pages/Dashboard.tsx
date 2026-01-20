@@ -6,7 +6,6 @@ import { TemplateUpload } from '@/components/template/TemplateUpload';
 import { VideoUpload, type VideoFile } from '@/components/video/VideoUpload';
 import { ProcessingSettings } from '@/components/settings/ProcessingSettings';
 import { ProcessingControls } from '@/components/processing/ProcessingControls';
-import { FramingPreview } from '@/components/preview/FramingPreview';
 import { useToast } from '@/hooks/use-toast';
 import {
   processVideo,
@@ -30,7 +29,6 @@ export default function Dashboard() {
     watermark: '',
     useAiFraming: true, // Enabled by default
   });
-  const [customContentBounds, setCustomContentBounds] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
   const conversionAbortRef = useRef<AbortController | null>(null);
@@ -85,7 +83,7 @@ export default function Dashboard() {
             video.file,
             templateFile,
             greenArea,
-            { ...settings, customContentBounds },
+            settings,
             video.id,
             updateVideoProgress
           );
@@ -444,24 +442,13 @@ export default function Dashboard() {
             />
           </div>
 
-          {/* Right column - Settings and Preview */}
+          {/* Right column - Settings */}
           <div className="space-y-6">
             <ProcessingSettings
               settings={settings}
               onSettingsChange={setSettings}
               disabled={isProcessing}
             />
-            
-            {/* Framing Preview - only show when template and at least one video exist */}
-            {templateFile && greenArea && videos.length > 0 && settings.useAiFraming && (
-              <FramingPreview
-                video={videos.find(v => v.status === 'queued') || videos[0]}
-                greenArea={greenArea}
-                templateFile={templateFile}
-                useAiFraming={settings.useAiFraming}
-                onContentBoundsChange={setCustomContentBounds}
-              />
-            )}
           </div>
         </div>
 
