@@ -181,10 +181,10 @@ async function extractVideosFromPage() {
       id: videoId,
       url: link.href,
       thumbnail: jsonInfo.thumbnail || img?.src || '',
-      views: jsonInfo.views || parseCount(viewsEl?.textContent || '0'),
-      likes: jsonInfo.likes || 0,
-      comments: jsonInfo.comments || 0,
-      shares: jsonInfo.shares || 0,
+      views: typeof jsonInfo.views === 'number' ? jsonInfo.views : parseCount(viewsEl?.textContent || '0'),
+      likes: typeof jsonInfo.likes === 'number' ? jsonInfo.likes : null,
+      comments: typeof jsonInfo.comments === 'number' ? jsonInfo.comments : null,
+      shares: typeof jsonInfo.shares === 'number' ? jsonInfo.shares : 0,
       description: jsonInfo.description || '',
       createTime: jsonInfo.createTime || null,
       downloadUrl: jsonInfo.downloadUrl || null,
@@ -451,8 +451,8 @@ function createToolbarHTML() {
       /* Body offset when toolbar is visible */
       body.tat-toolbar-active {
         margin-top: 100px !important;
+        margin-right: 340px !important;
       }
-      
       /* Video card selection overlay */
       .tat-video-selected {
         position: relative;
@@ -494,6 +494,118 @@ function createToolbarHTML() {
       .tat-video-hidden {
         display: none !important;
       }
+
+      /* Sidebar */
+      .tat-sidebar {
+        position: fixed;
+        top: 110px;
+        right: 0;
+        width: 340px;
+        height: calc(100vh - 110px);
+        background: linear-gradient(135deg, #111827 0%, #0b1220 100%);
+        border-left: 1px solid rgba(255,255,255,0.08);
+        z-index: 999998;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .tat-side-header {
+        padding: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        background: rgba(0,0,0,0.2);
+      }
+
+      .tat-side-titlebar {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .tat-side-titletext {
+        font-weight: 700;
+        font-size: 13px;
+        color: #fff;
+      }
+
+      .tat-side-subtitle {
+        font-size: 11px;
+        color: rgba(255,255,255,0.65);
+        margin-top: 2px;
+      }
+
+      .tat-side-hint {
+        margin-top: 8px;
+        font-size: 11px;
+        color: rgba(255,255,255,0.55);
+      }
+
+      .tat-side-list {
+        overflow: auto;
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .tat-side-row {
+        display: grid;
+        grid-template-columns: 24px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.04);
+      }
+
+      .tat-side-row:hover {
+        background: rgba(255,255,255,0.06);
+      }
+
+      .tat-side-title {
+        font-size: 11px;
+        color: rgba(255,255,255,0.9);
+        font-weight: 600;
+        margin-bottom: 2px;
+      }
+
+      .tat-side-stats {
+        font-size: 11px;
+        color: rgba(255,255,255,0.65);
+      }
+
+      .tat-side-check input {
+        width: 16px;
+        height: 16px;
+      }
+
+      .tat-side-jump {
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.15);
+        background: rgba(0,0,0,0.25);
+        color: rgba(255,255,255,0.85);
+        font-size: 11px;
+        cursor: pointer;
+      }
+
+      .tat-side-jump:hover {
+        background: rgba(255,255,255,0.08);
+      }
+
+      .tat-side-empty {
+        padding: 16px;
+        text-align: center;
+        font-size: 12px;
+        color: rgba(255,255,255,0.65);
+      }
+
+      /* Make room for sidebar */
+      body.tat-toolbar-active {
+        margin-top: 100px !important;
+        margin-right: 340px !important;
+      }
     </style>
     
     <div class="tat-main">
@@ -532,9 +644,9 @@ function createToolbarHTML() {
         <button class="tat-btn" data-sort="likes">❤️ Likes</button>
         <button class="tat-btn" data-sort="comments">💬 Coment.</button>
         <button class="tat-btn" data-sort="date">📅 Data</button>
-        <button class="tat-btn" id="tat-order">⬇️</button>
+        <button class="tat-btn" id="tat-order" title="Alternar ordem">⬇️ Maior → menor</button>
       </div>
-      
+
       <!-- Filters -->
       <div class="tat-group">
         <span class="tat-label">Views:</span>
@@ -542,37 +654,51 @@ function createToolbarHTML() {
         <span>-</span>
         <input type="number" class="tat-input" id="f-max-views" placeholder="Max">
       </div>
-      
+
       <div class="tat-group">
         <span class="tat-label">Likes:</span>
         <input type="number" class="tat-input" id="f-min-likes" placeholder="Min">
         <span>-</span>
         <input type="number" class="tat-input" id="f-max-likes" placeholder="Max">
       </div>
-      
+
       <div class="tat-group">
         <span class="tat-label">Coment.:</span>
         <input type="number" class="tat-input" id="f-min-comments" placeholder="Min">
         <span>-</span>
         <input type="number" class="tat-input" id="f-max-comments" placeholder="Max">
       </div>
-      
-      <button class="tat-btn" id="tat-apply-filter">🔍 Aplicar</button>
+
+      <button class="tat-btn" id="tat-apply-filter">✅ Aplicar</button>
       <button class="tat-btn" id="tat-clear-filter">❌ Limpar</button>
-      
+
       <!-- Actions -->
       <div class="tat-group" style="margin-left: auto;">
         <button class="tat-btn tat-btn-success" id="tat-load-all">🔄 Carregar TODOS</button>
-        <button class="tat-btn" id="tat-select-visible">☑️ Sel. Visíveis</button>
+        <button class="tat-btn" id="tat-select-visible">☑️ Sel. Lista</button>
         <button class="tat-btn" id="tat-clear-selection">✖️ Limpar Sel.</button>
       </div>
-      
+
       <div class="tat-group">
         <button class="tat-btn tat-btn-primary" id="tat-download-zip" disabled>📥 Baixar ZIP</button>
         <button class="tat-btn" id="tat-export-csv">📋 CSV</button>
       </div>
     </div>
-    
+
+    <!-- Sidebar list (reliable ordering) -->
+    <div class="tat-sidebar" id="tat-sidebar">
+      <div class="tat-side-header">
+        <div class="tat-side-titlebar">
+          <div>
+            <div class="tat-side-titletext">Lista (ordem do filtro)</div>
+            <div class="tat-side-subtitle" id="tat-sidebar-subtitle">Ordenação: Views • Maior → menor</div>
+          </div>
+        </div>
+        <div class="tat-side-hint">Marque os itens aqui e baixe em ZIP (sem abrir abas).</div>
+      </div>
+      <div class="tat-side-list" id="tat-sidebar-list"></div>
+    </div>
+
     <!-- Download Modal -->
     <div class="tat-modal" id="tat-modal">
       <div class="tat-modal-content">
@@ -647,7 +773,7 @@ function setupToolbarEvents() {
   // Order toggle
   toolbar.querySelector('#tat-order').addEventListener('click', (e) => {
     currentSort.order = currentSort.order === 'desc' ? 'asc' : 'desc';
-    e.target.textContent = currentSort.order === 'desc' ? '⬇️' : '⬆️';
+    e.target.textContent = currentSort.order === 'desc' ? '⬇️ Maior → menor' : '⬆️ Menor → maior';
     applyFiltersAndSort();
   });
   
@@ -723,7 +849,9 @@ function readFiltersFromInputs() {
   currentFilters.maxComments = maxComments ? parseInt(maxComments) : Infinity;
 }
 
-// Apply filters and sort - reorders actual DOM elements
+// Apply filters and sort
+// IMPORTANT: We no longer try to physically reorder TikTok's grid DOM (it can break / virtualize / hide items).
+// Instead, we (1) hide non-matching items and (2) render a reliable ordered list in our sidebar.
 function applyFiltersAndSort() {
   // If user is sorting/filtering by likes/comments, ensure we have stats (async)
   const needExtraStats =
@@ -739,14 +867,20 @@ function applyFiltersAndSort() {
     ensureStatsForVideos(extractedVideos);
   }
 
+  const valueOrZero = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : 0);
+
   // Filter videos
-  const filtered = extractedVideos.filter(v => {
-    if (v.views < currentFilters.minViews) return false;
-    if (v.views > currentFilters.maxViews) return false;
-    if (v.likes < currentFilters.minLikes) return false;
-    if (v.likes > currentFilters.maxLikes) return false;
-    if (v.comments < currentFilters.minComments) return false;
-    if (v.comments > currentFilters.maxComments) return false;
+  const filtered = extractedVideos.filter((v) => {
+    const views = valueOrZero(v.views);
+    const likes = valueOrZero(v.likes);
+    const comments = valueOrZero(v.comments);
+
+    if (views < currentFilters.minViews) return false;
+    if (views > currentFilters.maxViews) return false;
+    if (likes < currentFilters.minLikes) return false;
+    if (likes > currentFilters.maxLikes) return false;
+    if (comments < currentFilters.minComments) return false;
+    if (comments > currentFilters.maxComments) return false;
     return true;
   });
 
@@ -755,60 +889,42 @@ function applyFiltersAndSort() {
     let valA, valB;
     switch (currentSort.field) {
       case 'views':
-        valA = a.views; valB = b.views; break;
+        valA = valueOrZero(a.views);
+        valB = valueOrZero(b.views);
+        break;
       case 'likes':
-        valA = a.likes; valB = b.likes; break;
+        valA = valueOrZero(a.likes);
+        valB = valueOrZero(b.likes);
+        break;
       case 'comments':
-        valA = a.comments; valB = b.comments; break;
+        valA = valueOrZero(a.comments);
+        valB = valueOrZero(b.comments);
+        break;
       case 'date':
         valA = a.createTime ? new Date(a.createTime).getTime() : 0;
         valB = b.createTime ? new Date(b.createTime).getTime() : 0;
         break;
       default:
-        valA = 0; valB = 0;
+        valA = 0;
+        valB = 0;
     }
     return currentSort.order === 'desc' ? valB - valA : valA - valB;
   });
 
-  // Get the parent container of video cards
-  const videoGrid = document.querySelector('[data-e2e="user-post-item-list"]');
-
-  // Update visibility + selection classes
-  const filteredIds = new Set(filtered.map(v => v.id));
-  extractedVideos.forEach(v => {
+  // Update visibility + selection classes in TikTok grid (no reordering)
+  const filteredIds = new Set(filtered.map((v) => v.id));
+  extractedVideos.forEach((v) => {
     const el = videoElementsMap.get(v.id);
     if (!el) return;
 
     el.classList.toggle('tat-video-hidden', !filteredIds.has(v.id));
+
     if (selectedVideoIds.has(v.id)) el.classList.add('tat-video-selected');
     else el.classList.remove('tat-video-selected');
-
-    // Ensure we don't leave old ordering artifacts around
-    el.style.removeProperty('order');
   });
 
-  // Reorder by moving DOM nodes (doesn't break TikTok's grid like forcing flexbox)
-  if (videoGrid) {
-    const frag = document.createDocumentFragment();
-
-    // First: visible in correct order
-    for (const v of filtered) {
-      const el = videoElementsMap.get(v.id);
-      if (el && el.parentElement === videoGrid) frag.appendChild(el);
-    }
-
-    // Then: hidden items (keep them in DOM so TikTok lazy-load doesn't freak out)
-    for (const v of extractedVideos) {
-      if (filteredIds.has(v.id)) continue;
-      const el = videoElementsMap.get(v.id);
-      if (el && el.parentElement === videoGrid) frag.appendChild(el);
-    }
-
-    videoGrid.appendChild(frag);
-  }
-
-  // Setup click handlers for video selection
-  extractedVideos.forEach(video => {
+  // Setup click handlers for grid selection (optional)
+  extractedVideos.forEach((video) => {
     const el = videoElementsMap.get(video.id);
     if (el && !el.hasAttribute('data-tat-click')) {
       el.setAttribute('data-tat-click', 'true');
@@ -831,14 +947,105 @@ function applyFiltersAndSort() {
         }
 
         updateStats();
+        renderSidebarList(filtered);
       });
     }
   });
 
   updateStats();
 
-  // Store filtered for export
+  // Store filtered for export / download ordering
   window._tatFilteredVideos = filtered;
+
+  // Render sidebar in the correct order (this is the "truth" of ordering)
+  renderSidebarList(filtered);
+}
+
+function sortLabel() {
+  const fieldLabel =
+    currentSort.field === 'views'
+      ? 'Views'
+      : currentSort.field === 'likes'
+        ? 'Likes'
+        : currentSort.field === 'comments'
+          ? 'Comentários'
+          : 'Data';
+  const orderLabel = currentSort.order === 'desc' ? 'Maior → menor' : 'Menor → maior';
+  return `${fieldLabel} • ${orderLabel}`;
+}
+
+function renderSidebarList(videosInOrder) {
+  if (!toolbarElement) return;
+
+  const sidebar = toolbarElement.querySelector('#tat-sidebar');
+  const list = toolbarElement.querySelector('#tat-sidebar-list');
+  const subtitle = toolbarElement.querySelector('#tat-sidebar-subtitle');
+
+  if (!sidebar || !list || !subtitle) return;
+
+  subtitle.textContent = `Ordenação: ${sortLabel()}`;
+
+  const rows = videosInOrder
+    .slice(0, 5000) // safety
+    .map((v, idx) => {
+      const views = typeof v.views === 'number' ? v.views : 0;
+      const likes = typeof v.likes === 'number' ? v.likes : 0;
+      const comments = typeof v.comments === 'number' ? v.comments : 0;
+      const isChecked = selectedVideoIds.has(v.id);
+
+      return `
+        <div class="tat-side-row" data-id="${v.id}">
+          <label class="tat-side-check">
+            <input type="checkbox" class="tat-side-cb" data-id="${v.id}" ${isChecked ? 'checked' : ''} />
+          </label>
+          <div class="tat-side-meta">
+            <div class="tat-side-title">#${idx + 1} • ${v.id}</div>
+            <div class="tat-side-stats">👀 ${formatNumber(views)}  ❤️ ${formatNumber(likes)}  💬 ${formatNumber(comments)}</div>
+          </div>
+          <button class="tat-side-jump" data-id="${v.id}">Ir</button>
+        </div>
+      `;
+    })
+    .join('');
+
+  list.innerHTML = rows || `<div class="tat-side-empty">Nada encontrado com esses filtros.</div>`;
+
+  // Event delegation (bind once)
+  if (!sidebar.hasAttribute('data-tat-bound')) {
+    sidebar.setAttribute('data-tat-bound', 'true');
+
+    sidebar.addEventListener('click', (e) => {
+      const target = e.target;
+      const id = target?.getAttribute?.('data-id') || target?.closest?.('[data-id]')?.getAttribute?.('data-id');
+      if (!id) return;
+
+      // Jump button
+      if (target.classList?.contains('tat-side-jump')) {
+        const el = videoElementsMap.get(id);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.add('tat-video-selected');
+          setTimeout(() => el.classList.remove('tat-video-selected'), 800);
+        }
+      }
+    });
+
+    sidebar.addEventListener('change', (e) => {
+      const target = e.target;
+      if (!target.classList?.contains('tat-side-cb')) return;
+
+      const id = target.getAttribute('data-id');
+      if (!id) return;
+
+      if (target.checked) selectedVideoIds.add(id);
+      else selectedVideoIds.delete(id);
+
+      const el = videoElementsMap.get(id);
+      if (el) el.classList.toggle('tat-video-selected', target.checked);
+
+      updateStats();
+    });
+  }
 }
 
 function scheduleApplyFiltersAndSort() {
@@ -889,15 +1096,16 @@ async function fetchTikTokItemStats(videoId) {
 }
 
 async function ensureStatsForVideos(videos) {
-  // Only fetch missing stats for videos that matter
+  // Fetch missing stats for videos that matter.
+  // We treat likes/comments as "unknown" when null/undefined.
   const missing = videos
-    .filter(v => v && v.id && (v.likes === 0 && v.comments === 0) && !tatStatsCache.has(v.id))
-    .slice(0, 120); // cap to avoid huge bursts
+    .filter((v) => v && v.id && (!tatStatsCache.has(v.id)) && (v.likes == null || v.comments == null))
+    .slice(0, 200); // slightly higher cap to make sorting actually respond
 
   if (missing.length === 0) return;
 
-  // Concurrency = 4
-  const concurrency = 4;
+  // Concurrency = 6 (a bit faster, still polite)
+  const concurrency = 6;
   let idx = 0;
 
   const worker = async () => {
@@ -909,9 +1117,12 @@ async function ensureStatsForVideos(videos) {
         v.likes = stats.likes;
         v.comments = stats.comments;
         v.shares = stats.shares;
+      } else {
+        // keep as 0 for display (but remember it might be blocked)
+        if (v.likes == null) v.likes = 0;
+        if (v.comments == null) v.comments = 0;
       }
-      // small pacing
-      await sleep(120);
+      await sleep(80);
     }
   };
 
@@ -1062,9 +1273,9 @@ async function downloadVideosAsZip() {
   const selectedVideos = extractedVideos.filter(v => selectedVideoIds.has(v.id));
   if (selectedVideos.length === 0) return;
 
-  const jszipOk = await loadJSZip();
-  if (!jszipOk || typeof JSZip === 'undefined') {
-    alert('❌ Não foi possível carregar o ZIP (JSZip). Reinstale a extensão (versão nova) e tente novamente.');
+  // JSZip is loaded as a content script (manifest) to avoid TikTok CSP issues
+  if (typeof JSZip === 'undefined') {
+    alert('❌ ZIP indisponível (JSZip não carregou). Reinstale a extensão e recarregue a página do TikTok.');
     return;
   }
 
@@ -1110,11 +1321,11 @@ async function downloadVideosAsZip() {
     try {
       addLog(`[${i + 1}/${orderedVideos.length}] Baixando ${video.id}...`);
       
-      // Try multiple download sources
+      // Try multiple download sources (prefer internal CDN url when available)
       const downloadUrls = [
+        video.downloadUrl,
         `https://tikwm.com/video/media/hdplay/${video.id}.mp4`,
         `https://www.tikwm.com/video/media/play/${video.id}.mp4`,
-        video.downloadUrl
       ].filter(Boolean);
       
       let blob = null;
@@ -1124,7 +1335,8 @@ async function downloadVideosAsZip() {
         
         try {
           const response = await fetch(url, {
-            credentials: 'include',
+            mode: 'cors',
+            credentials: 'omit',
             headers: {
               'Accept': 'video/mp4,video/*,*/*'
             }
