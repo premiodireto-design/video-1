@@ -298,21 +298,36 @@ export async function processVideo(
     // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
 
-    // Clear with black
+    // Clear with black background
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, 1080, 1920);
 
+    // Fill the green area with white FIRST to eliminate any green remnants
+    // This ensures no green or black borders show through at the edges
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(x, y, ww, wh);
+
     // Draw video in the green area position with clipping
-    // Use a slightly larger clip area (2px margin) to ensure no green edge pixels are visible
-    const margin = 2;
+    // Expand the clip area slightly (4px outward) to ensure full coverage
+    // and prevent any edge artifacts from showing
+    const expandMargin = 4;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x + margin, y + margin, ww - margin * 2, wh - margin * 2);
+    ctx.rect(x - expandMargin, y - expandMargin, ww + expandMargin * 2, wh + expandMargin * 2);
     ctx.clip();
-    ctx.drawImage(video, x + offsetX, y + offsetY, scaledW, scaledH);
+    
+    // Draw video slightly larger to cover any potential edge gaps
+    const videoExpand = 2;
+    ctx.drawImage(
+      video, 
+      x + offsetX - videoExpand, 
+      y + offsetY - videoExpand, 
+      scaledW + videoExpand * 2, 
+      scaledH + videoExpand * 2
+    );
     ctx.restore();
 
-    // Draw template mask on top
+    // Draw template mask on top (covers everything outside the green area)
     ctx.drawImage(maskCanvas, 0, 0);
 
     // Draw watermark if provided
