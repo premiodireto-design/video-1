@@ -21,6 +21,11 @@ let currentFilters = {
 };
 let selectedVideoIds = new Set();
 
+// Stats cache (TikTok profile grid often doesn't show likes/comments; we fetch via internal API)
+const tatStatsCache = new Map(); // id -> {likes, comments, shares}
+const tatStatsLoading = new Set();
+let tatApplyScheduled = false;
+
 // Listen for messages from popup/background
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('[TikTok Analyser] Message received:', request.action);
@@ -720,6 +725,20 @@ function readFiltersFromInputs() {
 
 // Apply filters and sort - reorders actual DOM elements
 function applyFiltersAndSort() {
+  // If user is sorting/filtering by likes/comments, ensure we have stats (async)
+  const needExtraStats =
+    currentSort.field === 'likes' ||
+    currentSort.field === 'comments' ||
+    currentFilters.minLikes > 0 ||
+    Number.isFinite(currentFilters.maxLikes) ||
+    currentFilters.minComments > 0 ||
+    Number.isFinite(currentFilters.maxComments);
+
+  if (needExtraStats) {
+    // Fire-and-forget; will re-run apply once stats arrive
+    ensureStatsForVideos(extractedVideos);
+  }
+
   // Filter videos
   const filtered = extractedVideos.filter(v => {
     if (v.views < currentFilters.minViews) return false;
@@ -730,7 +749,7 @@ function applyFiltersAndSort() {
     if (v.comments > currentFilters.maxComments) return false;
     return true;
   });
-  
+
   // Sort
   filtered.sort((a, b) => {
     let valA, valB;
@@ -750,55 +769,44 @@ function applyFiltersAndSort() {
     }
     return currentSort.order === 'desc' ? valB - valA : valA - valB;
   });
-  
+
   // Get the parent container of video cards
   const videoGrid = document.querySelector('[data-e2e="user-post-item-list"]');
-  
+
+  // Update visibility + selection classes
+  const filteredIds = new Set(filtered.map(v => v.id));
+  extractedVideos.forEach(v => {
+    const el = videoElementsMap.get(v.id);
+    if (!el) return;
+
+    el.classList.toggle('tat-video-hidden', !filteredIds.has(v.id));
+    if (selectedVideoIds.has(v.id)) el.classList.add('tat-video-selected');
+    else el.classList.remove('tat-video-selected');
+
+    // Ensure we don't leave old ordering artifacts around
+    el.style.removeProperty('order');
+  });
+
+  // Reorder by moving DOM nodes (doesn't break TikTok's grid like forcing flexbox)
   if (videoGrid) {
-    // Hide all videos first
-    extractedVideos.forEach(v => {
+    const frag = document.createDocumentFragment();
+
+    // First: visible in correct order
+    for (const v of filtered) {
       const el = videoElementsMap.get(v.id);
-      if (el) {
-        el.classList.add('tat-video-hidden');
-      }
-    });
-    
-    // Show and reorder filtered videos
-    filtered.forEach((video, index) => {
-      const el = videoElementsMap.get(video.id);
-      if (el) {
-        el.classList.remove('tat-video-hidden');
-        el.style.order = index;
-        
-        // Update selection visual
-        if (selectedVideoIds.has(video.id)) {
-          el.classList.add('tat-video-selected');
-        } else {
-          el.classList.remove('tat-video-selected');
-        }
-      }
-    });
-    
-    // Make grid use flexbox order
-    videoGrid.style.display = 'flex';
-    videoGrid.style.flexWrap = 'wrap';
-  } else {
-    // Fallback: just toggle visibility
-    extractedVideos.forEach(v => {
+      if (el && el.parentElement === videoGrid) frag.appendChild(el);
+    }
+
+    // Then: hidden items (keep them in DOM so TikTok lazy-load doesn't freak out)
+    for (const v of extractedVideos) {
+      if (filteredIds.has(v.id)) continue;
       const el = videoElementsMap.get(v.id);
-      if (el) {
-        const isVisible = filtered.some(f => f.id === v.id);
-        el.classList.toggle('tat-video-hidden', !isVisible);
-        
-        if (selectedVideoIds.has(v.id)) {
-          el.classList.add('tat-video-selected');
-        } else {
-          el.classList.remove('tat-video-selected');
-        }
-      }
-    });
+      if (el && el.parentElement === videoGrid) frag.appendChild(el);
+    }
+
+    videoGrid.appendChild(frag);
   }
-  
+
   // Setup click handlers for video selection
   extractedVideos.forEach(video => {
     const el = videoElementsMap.get(video.id);
@@ -806,14 +814,14 @@ function applyFiltersAndSort() {
       el.setAttribute('data-tat-click', 'true');
       el.style.cursor = 'pointer';
       el.style.position = 'relative';
-      
+
       el.addEventListener('click', (e) => {
         // Don't interfere with links
         if (e.target.tagName === 'A' || e.target.closest('a')) return;
-        
+
         e.preventDefault();
         e.stopPropagation();
-        
+
         if (selectedVideoIds.has(video.id)) {
           selectedVideoIds.delete(video.id);
           el.classList.remove('tat-video-selected');
@@ -821,16 +829,94 @@ function applyFiltersAndSort() {
           selectedVideoIds.add(video.id);
           el.classList.add('tat-video-selected');
         }
-        
+
         updateStats();
       });
     }
   });
-  
+
   updateStats();
-  
+
   // Store filtered for export
   window._tatFilteredVideos = filtered;
+}
+
+function scheduleApplyFiltersAndSort() {
+  if (tatApplyScheduled) return;
+  tatApplyScheduled = true;
+  setTimeout(() => {
+    tatApplyScheduled = false;
+    applyFiltersAndSort();
+  }, 250);
+}
+
+async function fetchTikTokItemStats(videoId) {
+  if (!videoId) return null;
+  if (tatStatsCache.has(videoId)) return tatStatsCache.get(videoId);
+  if (tatStatsLoading.has(videoId)) return null;
+
+  tatStatsLoading.add(videoId);
+
+  try {
+    const url = `https://www.tiktok.com/api/item/detail/?aid=1988&itemId=${encodeURIComponent(videoId)}`;
+    const res = await fetch(url, {
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json, text/plain, */*'
+      }
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const stats = data?.itemInfo?.itemStruct?.stats || data?.itemInfo?.itemStruct?.statsV2;
+
+    if (!stats) return null;
+
+    const result = {
+      likes: parseInt(stats.diggCount || stats.likeCount || 0),
+      comments: parseInt(stats.commentCount || 0),
+      shares: parseInt(stats.shareCount || 0)
+    };
+
+    tatStatsCache.set(videoId, result);
+    return result;
+  } catch (e) {
+    // Ignore (blocked / rate-limited)
+    return null;
+  } finally {
+    tatStatsLoading.delete(videoId);
+  }
+}
+
+async function ensureStatsForVideos(videos) {
+  // Only fetch missing stats for videos that matter
+  const missing = videos
+    .filter(v => v && v.id && (v.likes === 0 && v.comments === 0) && !tatStatsCache.has(v.id))
+    .slice(0, 120); // cap to avoid huge bursts
+
+  if (missing.length === 0) return;
+
+  // Concurrency = 4
+  const concurrency = 4;
+  let idx = 0;
+
+  const worker = async () => {
+    while (idx < missing.length) {
+      const i = idx++;
+      const v = missing[i];
+      const stats = await fetchTikTokItemStats(v.id);
+      if (stats) {
+        v.likes = stats.likes;
+        v.comments = stats.comments;
+        v.shares = stats.shares;
+      }
+      // small pacing
+      await sleep(120);
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, worker));
+  scheduleApplyFiltersAndSort();
 }
 
 // Update stats
@@ -892,28 +978,29 @@ async function startExtraction() {
 // Load ALL videos
 async function loadAllVideos() {
   if (isExtracting) return;
-  
+
   isExtracting = true;
   extractionAborted = false;
   showProgress(true);
-  
+
   const btn = toolbarElement.querySelector('#tat-load-all');
   btn.disabled = true;
   btn.textContent = '⏳ Carregando...';
-  
-  let previousCount = extractedVideos.length;
+
   let noNewVideosCount = 0;
   let scrollCount = 0;
-  const maxNoNewVideos = 4;
-  
+  const maxNoNewVideos = 5;
+
+  // IMPORTANT: during auto-scroll we DO NOT reorder/hide elements;
+  // TikTok's infinite grid can glitch if we mess with DOM while loading.
   while (noNewVideosCount < maxNoNewVideos && !extractionAborted) {
     window.scrollTo(0, document.documentElement.scrollHeight);
-    await sleep(2000);
-    
+    await sleep(1800);
+
     const newVideos = await extractVideosFromPage();
     const existingIds = new Set(extractedVideos.map(v => v.id));
     let addedCount = 0;
-    
+
     for (const video of newVideos) {
       if (!existingIds.has(video.id)) {
         extractedVideos.push(video);
@@ -923,35 +1010,30 @@ async function loadAllVideos() {
         addedCount++;
       }
     }
-    
+
     scrollCount++;
-    
-    if (addedCount === 0) {
-      noNewVideosCount++;
-    } else {
-      noNewVideosCount = 0;
-    }
-    
+
+    if (addedCount === 0) noNewVideosCount++;
+    else noNewVideosCount = 0;
+
     updateProgress(
-      Math.min(95, 10 + scrollCount * 3),
+      Math.min(95, 10 + scrollCount * 4),
       `${extractedVideos.length} vídeos (scroll ${scrollCount})...`
     );
-    
-    // Update DOM periodically
-    if (scrollCount % 3 === 0) {
-      applyFiltersAndSort();
-    }
   }
-  
+
+  // Back to top for user convenience
   window.scrollTo(0, 0);
+
   showProgress(false);
   isExtracting = false;
-  
+
   btn.disabled = false;
   btn.textContent = '🔄 Carregar TODOS';
-  
+
+  // Now safely apply filters/sort
   applyFiltersAndSort();
-  
+
   alert(`✅ Carregamento completo!\n${extractedVideos.length} vídeos encontrados.`);
 }
 
@@ -979,19 +1061,25 @@ function clearSelection() {
 async function downloadVideosAsZip() {
   const selectedVideos = extractedVideos.filter(v => selectedVideoIds.has(v.id));
   if (selectedVideos.length === 0) return;
-  
+
+  const jszipOk = await loadJSZip();
+  if (!jszipOk || typeof JSZip === 'undefined') {
+    alert('❌ Não foi possível carregar o ZIP (JSZip). Reinstale a extensão (versão nova) e tente novamente.');
+    return;
+  }
+
   // Sort by current filter order
   const orderedVideos = (window._tatFilteredVideos || []).filter(v => selectedVideoIds.has(v.id));
-  
+
   const modal = toolbarElement.querySelector('#tat-modal');
   const progressFill = toolbarElement.querySelector('#tat-dl-progress');
   const progressText = toolbarElement.querySelector('#tat-dl-text');
   const logContainer = toolbarElement.querySelector('#tat-dl-log');
-  
+
   modal.classList.add('active');
   logContainer.innerHTML = '';
   extractionAborted = false;
-  
+
   const addLog = (text, type = '') => {
     const item = document.createElement('div');
     item.className = 'tat-modal-log-item ' + type;
@@ -999,9 +1087,9 @@ async function downloadVideosAsZip() {
     logContainer.appendChild(item);
     logContainer.scrollTop = logContainer.scrollHeight;
   };
-  
+
   addLog(`Iniciando download de ${orderedVideos.length} vídeos...`);
-  
+
   // Create ZIP using JSZip
   const zip = new JSZip();
   let successCount = 0;
@@ -1036,7 +1124,7 @@ async function downloadVideosAsZip() {
         
         try {
           const response = await fetch(url, {
-            mode: 'cors',
+            credentials: 'include',
             headers: {
               'Accept': 'video/mp4,video/*,*/*'
             }
@@ -1137,12 +1225,25 @@ async function downloadVideosAsZip() {
 // Export CSV
 function exportCSV() {
   const videos = window._tatFilteredVideos || extractedVideos;
-  
-  const headers = ['Posição', 'ID', 'URL TikTok', 'Link Download', 'Descrição', 'Views', 'Likes', 'Comentários', 'Data'];
+
+  const headers = [
+    'Posição',
+    'ID',
+    'URL TikTok',
+    'Link Interno (CDN)',
+    'Link Download (tikwm)',
+    'Descrição',
+    'Views',
+    'Likes',
+    'Comentários',
+    'Data'
+  ];
+
   const rows = videos.map((v, idx) => [
     idx + 1,
     v.id,
     v.url,
+    v.downloadUrl || '',
     `https://tikwm.com/video/media/hdplay/${v.id}.mp4`,
     `"${(v.description || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
     v.views,
@@ -1150,7 +1251,7 @@ function exportCSV() {
     v.comments,
     v.createTime ? new Date(v.createTime).toLocaleDateString('pt-BR') : ''
   ]);
-  
+
   const csv = '\ufeff' + [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');
   downloadFile(csv, `tiktok_${getUsername()}_${Date.now()}.csv`, 'text/csv;charset=utf-8');
 }
@@ -1263,11 +1364,25 @@ new MutationObserver(() => {
   }
 }).observe(document, { subtree: true, childList: true });
 
-// Load JSZip
-if (typeof JSZip === 'undefined') {
-  const script = document.createElement('script');
-  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
-  document.head.appendChild(script);
+// Load JSZip (local, to avoid TikTok CSP blocking CDNs)
+async function loadJSZip() {
+  if (typeof JSZip !== 'undefined') return true;
+
+  return await new Promise((resolve) => {
+    const existing = document.querySelector('script[data-tat-jszip]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve(true));
+      existing.addEventListener('error', () => resolve(false));
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.setAttribute('data-tat-jszip', 'true');
+    script.src = chrome.runtime.getURL('vendor/jszip.min.js');
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
 }
 
 console.log('[TikTok Analyser] Content script initialized v2');
