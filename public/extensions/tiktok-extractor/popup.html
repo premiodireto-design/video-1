@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TikTok Extractor</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      padding: 16px;
+    }
+    
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .header svg {
+      width: 28px;
+      height: 28px;
+    }
+    
+    .header h1 {
+      font-size: 16px;
+      font-weight: 600;
+    }
+    
+    .status {
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    
+    .status-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.5);
+      margin-bottom: 4px;
+    }
+    
+    .status-value {
+      font-size: 14px;
+      font-weight: 500;
+    }
+    
+    .status-value.ready {
+      color: #00f5d4;
+    }
+    
+    .status-value.not-ready {
+      color: #ff6b6b;
+    }
+    
+    .count-box {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: linear-gradient(135deg, #00f5d4 0%, #00bbf9 100%);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    
+    .count-number {
+      font-size: 32px;
+      font-weight: 700;
+      color: #1a1a2e;
+    }
+    
+    .count-label {
+      font-size: 14px;
+      color: #1a1a2e;
+      opacity: 0.8;
+    }
+    
+    .btn {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 8px;
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, #fe2c55 0%, #25f4ee 100%);
+      color: #fff;
+    }
+    
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(254, 44, 85, 0.4);
+    }
+    
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+    
+    .btn-secondary {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+    }
+    
+    .btn-secondary:hover {
+      background: rgba(255,255,255,0.15);
+    }
+    
+    .btn-secondary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .info {
+      font-size: 11px;
+      color: rgba(255,255,255,0.5);
+      text-align: center;
+      margin-top: 12px;
+      line-height: 1.5;
+    }
+    
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 20px;
+    }
+    
+    .loading.active {
+      display: block;
+    }
+    
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid rgba(255,255,255,0.1);
+      border-top-color: #00f5d4;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 12px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+    </svg>
+    <h1>TikTok Extractor</h1>
+  </div>
+  
+  <div id="main-content">
+    <div class="status">
+      <div class="status-label">Status</div>
+      <div class="status-value" id="status-text">Verificando...</div>
+    </div>
+    
+    <div class="count-box" id="count-box">
+      <span class="count-number" id="video-count">0</span>
+      <span class="count-label">vídeos<br>encontrados</span>
+    </div>
+    
+    <button class="btn btn-primary" id="extract-btn" disabled>
+      🔍 Extrair Vídeos
+    </button>
+    
+    <button class="btn btn-secondary" id="copy-btn" disabled>
+      📋 Copiar JSON
+    </button>
+    
+    <button class="btn btn-secondary" id="scroll-btn" disabled>
+      ⬇️ Carregar Mais (Scroll)
+    </button>
+  </div>
+  
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <div>Extraindo dados...</div>
+  </div>
+  
+  <p class="info">
+    Acesse um perfil do TikTok (@usuario) e clique em "Extrair Vídeos" para obter os dados.
+  </p>
+  
+  <script src="popup.js"></script>
+</body>
+</html>

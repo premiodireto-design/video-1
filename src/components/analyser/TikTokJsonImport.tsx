@@ -3,7 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { FileJson, Upload, CheckCircle, AlertCircle, ExternalLink, Copy } from 'lucide-react';
+import { FileJson, Upload, CheckCircle, AlertCircle, Chrome } from 'lucide-react';
+import { ExtensionDownloader } from './ExtensionDownloader';
 import type { AnalyserVideo } from '@/types/analyser';
 
 interface TikTokJsonImportProps {
@@ -15,13 +16,14 @@ function parseJsonInput(jsonText: string): { videos: AnalyserVideo[]; username: 
   try {
     const data = JSON.parse(jsonText);
     
-    // Handle array directly
+    // Handle array directly or object with videos
     const items = Array.isArray(data) ? data : data.videos || data.items || data.itemList || [];
+    const extractedUsername = data.username || '';
     
     if (!items.length) return null;
     
     const videos: AnalyserVideo[] = [];
-    let username = '';
+    let username = extractedUsername;
     
     for (const item of items) {
       // Try to extract username from first item
@@ -112,6 +114,11 @@ export function TikTokJsonImport({ onImport, isLoading }: TikTokJsonImportProps)
       setError('Nenhum vídeo encontrado no JSON.');
     }
   };
+
+  const handleDownloadExtension = () => {
+    // Create a zip file with the extension
+    window.open('/extensions/tiktok-extractor/', '_blank');
+  };
   
   return (
     <Card>
@@ -121,29 +128,46 @@ export function TikTokJsonImport({ onImport, isLoading }: TikTokJsonImportProps)
           Importar JSON
         </CardTitle>
         <CardDescription>
-          Cole os dados JSON exportados de uma extensão ou ferramenta
+          Use nossa extensão gratuita para extrair dados do TikTok
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Extension download section */}
+        <div className="p-4 bg-gradient-to-r from-primary/10 to-primary/5 rounded-lg border border-primary/20">
+          <div className="flex items-start gap-3">
+            <div className="rounded-full bg-primary/20 p-2">
+              <Chrome className="h-5 w-5 text-primary" />
+            </div>
+            <div className="flex-1 space-y-2">
+              <p className="font-medium text-sm">TikTok Video Extractor</p>
+              <p className="text-xs text-muted-foreground">
+                Extensão gratuita para Chrome que extrai todos os vídeos de um perfil do TikTok com métricas completas.
+              </p>
+              <div className="flex gap-2 pt-1">
+                <ExtensionDownloader />
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div className="text-sm text-muted-foreground space-y-2 p-4 bg-muted/50 rounded-lg">
-          <p className="font-medium">Como obter os dados:</p>
-          <ol className="list-decimal list-inside space-y-1">
-            <li>Instale uma extensão como "Sort for TikTok" no Chrome</li>
-            <li>Acesse o perfil desejado no TikTok</li>
-            <li>A extensão vai mostrar os vídeos com métricas</li>
-            <li>Use a função de exportar/copiar da extensão</li>
-            <li>Cole o JSON aqui</li>
+          <p className="font-medium">Como usar:</p>
+          <ol className="list-decimal list-inside space-y-1 text-xs">
+            <li>Baixe e extraia o arquivo ZIP da extensão</li>
+            <li>Abra <code className="bg-muted px-1 rounded">chrome://extensions</code> no Chrome</li>
+            <li>Ative o "Modo do desenvolvedor" no canto superior direito</li>
+            <li>Clique em "Carregar sem compactação" e selecione a pasta extraída</li>
+            <li>Acesse um perfil do TikTok e clique no ícone da extensão</li>
+            <li>Clique em "Extrair Vídeos" e depois "Copiar JSON"</li>
+            <li>Cole o JSON aqui!</li>
           </ol>
-          <p className="text-xs mt-2">
-            💡 Alternativamente, abra o DevTools (F12), vá em Network, busque por "item_list" e copie a resposta JSON.
-          </p>
         </div>
         
         <Textarea
-          placeholder='Cole o JSON aqui... Ex: [{"id": "123", "desc": "...", "stats": {...}}]'
+          placeholder='Cole o JSON aqui... Ex: {"username": "...", "videos": [...]}'
           value={jsonText}
           onChange={(e) => handleTextChange(e.target.value)}
-          className="min-h-[150px] font-mono text-sm"
+          className="min-h-[120px] font-mono text-sm"
         />
         
         {error && (
@@ -155,9 +179,9 @@ export function TikTokJsonImport({ onImport, isLoading }: TikTokJsonImportProps)
         )}
         
         {parsedCount !== null && parsedCount > 0 && (
-          <Alert className="border-green-500/20 bg-green-500/5">
-            <CheckCircle className="h-4 w-4 text-green-600" />
-            <AlertTitle className="text-green-600">JSON válido</AlertTitle>
+          <Alert className="border-primary/20 bg-primary/5">
+            <CheckCircle className="h-4 w-4 text-primary" />
+            <AlertTitle className="text-primary">JSON válido</AlertTitle>
             <AlertDescription className="text-muted-foreground">
               {parsedCount} vídeos encontrados e prontos para importar
             </AlertDescription>
