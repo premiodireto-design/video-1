@@ -105,17 +105,19 @@ export async function processVideo(
   });
 
   // Create canvas for composition
-  // Performance: when maxQuality=false, render at 720x1280 (faster) and upscale later during MP4 conversion.
-  const renderScale = settings.maxQuality ? 1 : (2 / 3); // 1080->720
-
+  // ALWAYS render at full 1080x1920 for best quality and smooth playback
   const makeEven = (n: number) => n % 2 === 0 ? n : n - 1;
 
   const canvas = document.createElement('canvas');
-  canvas.width = makeEven(Math.round(1080 * renderScale));
-  canvas.height = makeEven(Math.round(1920 * renderScale));
+  canvas.width = 1080;
+  canvas.height = 1920;
 
-  const ctx = canvas.getContext('2d', { alpha: false })!;
+  const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false })!;
   ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  
+  // Remove renderScale - always use full resolution
+  const renderScale = 1;
 
   // Calculate video scaling
   const { x, y, width: ww, height: wh } = greenArea;
@@ -281,10 +283,11 @@ export async function processVideo(
     return false;
   };
 
+  // Use higher bitrate for smoother video output
   const recorder = new MediaRecorder(combinedStream, {
     mimeType,
-    videoBitsPerSecond: settings.maxQuality ? 12000000 : 8000000,
-    audioBitsPerSecond: 192000,
+    videoBitsPerSecond: settings.maxQuality ? 16000000 : 10000000,
+    audioBitsPerSecond: 256000,
   });
 
   const chunks: Blob[] = [];
@@ -303,63 +306,62 @@ export async function processVideo(
     // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
 
-    // Clear with black background
-    ctx.fillStyle = '#000000';
+    // Clear entire canvas with white background first
+    ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, 1080, 1920);
 
-    // Fill the green area with white FIRST to eliminate any green remnants
-    // This ensures no green or black borders show through at the edges
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(x, y, ww, wh);
-
-    // Draw video in the green area position with clipping
-    // Expand the clip area slightly (4px outward) to ensure full coverage
-    // and prevent any edge artifacts from showing
-    const expandMargin = 4;
+    // Draw video FIRST (before template) to ensure it's behind
+    // Use clipping to constrain video to the green area bounds
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x - expandMargin, y - expandMargin, ww + expandMargin * 2, wh + expandMargin * 2);
+    // Slightly expand clip area to ensure full coverage with no gaps
+    ctx.rect(x - 2, y - 2, ww + 4, wh + 4);
     ctx.clip();
     
-    // Draw video slightly larger to cover any potential edge gaps
-    const videoExpand = 2;
+    // Fill clip area with white to ensure no green shows through
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(x - 2, y - 2, ww + 4, wh + 4);
+    
+    // Draw video
     ctx.drawImage(
       video, 
-      x + offsetX - videoExpand, 
-      y + offsetY - videoExpand, 
-      scaledW + videoExpand * 2, 
-      scaledH + videoExpand * 2
+      x + offsetX, 
+      y + offsetY, 
+      scaledW, 
+      scaledH
     );
     ctx.restore();
 
-    // Draw template mask on top (covers everything outside the green area)
+    // Draw template mask on top (this has transparent where green was)
     ctx.drawImage(maskCanvas, 0, 0);
 
     // Draw watermark if provided
     if (settings.watermark && settings.watermark.trim()) {
       const watermarkText = settings.watermark.trim();
-      // Position: 30% up from the bottom of the green area (where template ends)
-      const templateEndY = y + wh; // Bottom of green area
-      const watermarkY = templateEndY - (wh * 0.15); // 15% up from bottom
+      const templateEndY = y + wh;
+      const watermarkY = templateEndY - (wh * 0.15);
       
       ctx.save();
       ctx.font = '28px Arial';
-      ctx.fillStyle = 'rgba(128, 128, 128, 0.5)'; // Medium gray, 50% opacity
+      ctx.fillStyle = 'rgba(128, 128, 128, 0.5)';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(watermarkText, 1080 / 2, watermarkY);
       ctx.restore();
     }
 
-    // Update progress
+    // Update progress (less frequently to reduce overhead)
     const currentProgress = video.currentTime - trimStart;
-    const progress = 20 + (currentProgress / effectiveDuration) * 75;
-    onProgress({
-      videoId,
-      progress: Math.min(95, Math.round(progress)),
-      stage: 'encoding',
-      message: `Processando: ${Math.round((currentProgress / effectiveDuration) * 100)}%`,
-    });
+    const progressPercent = Math.round((currentProgress / effectiveDuration) * 100);
+    if (progressPercent % 5 === 0) { // Only update every 5%
+      const progress = 20 + (currentProgress / effectiveDuration) * 75;
+      onProgress({
+        videoId,
+        progress: Math.min(95, Math.round(progress)),
+        stage: 'encoding',
+        message: `Processando: ${progressPercent}%`,
+      });
+    }
   };
 
   const stopRecording = () => {
