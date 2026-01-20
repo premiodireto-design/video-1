@@ -1,17 +1,6 @@
 import type { GreenArea } from './greenDetection';
 import { captureVideoFrame, analyzeVideoFrame, calculateSmartPosition, getDefaultAnalysis, type FrameAnalysis } from './frameAnalyzer';
 
-export interface CaptionWord {
-  text: string;
-  start: number;
-  end: number;
-}
-
-export interface CaptionData {
-  text: string;
-  words: CaptionWord[];
-}
-
 export interface ProcessingSettings {
   fitMode: 'cover' | 'contain';
   normalizeAudio: boolean;
@@ -19,13 +8,12 @@ export interface ProcessingSettings {
   removeBlackBars: boolean;
   watermark?: string; // Optional @ handle for watermark
   useAiFraming?: boolean; // Use AI to detect faces and position video
-  useCaptions?: boolean; // Use AI to generate animated captions
 }
 
 export interface ProcessingProgress {
   videoId: string;
   progress: number;
-  stage: 'loading' | 'processing' | 'encoding' | 'transcribing' | 'done' | 'error';
+  stage: 'loading' | 'processing' | 'encoding' | 'done' | 'error';
   message: string;
 }
 
@@ -59,93 +47,6 @@ export async function getVideoInfo(videoFile: File): Promise<{
 }
 
 /**
- * Draws animated captions on the canvas with word-by-word highlighting
- */
-function drawAnimatedCaptions(
-  ctx: CanvasRenderingContext2D,
-  captionData: CaptionData,
-  currentTime: number,
-  areaX: number,
-  areaY: number,
-  areaWidth: number,
-  areaHeight: number
-) {
-  // Find currently visible words (show a window of words around current time)
-  const windowDuration = 3; // Show 3 seconds of text at a time
-  const windowStart = currentTime - 0.5;
-  const windowEnd = currentTime + windowDuration;
-  
-  const visibleWords = captionData.words.filter(
-    word => word.end >= windowStart && word.start <= windowEnd
-  );
-  
-  if (visibleWords.length === 0) return;
-  
-  // Build lines of text (max ~6 words per line for readability)
-  const maxWordsPerLine = 6;
-  const lines: { words: CaptionWord[]; text: string }[] = [];
-  let currentLine: CaptionWord[] = [];
-  
-  for (const word of visibleWords) {
-    currentLine.push(word);
-    if (currentLine.length >= maxWordsPerLine) {
-      lines.push({ words: [...currentLine], text: currentLine.map(w => w.text).join(' ') });
-      currentLine = [];
-    }
-  }
-  if (currentLine.length > 0) {
-    lines.push({ words: currentLine, text: currentLine.map(w => w.text).join(' ') });
-  }
-  
-  // Only show last 2 lines to keep it readable
-  const displayLines = lines.slice(-2);
-  
-  // Caption styling
-  const fontSize = Math.round(areaWidth * 0.045); // ~48px at 1080 width
-  const lineHeight = fontSize * 1.4;
-  const captionY = areaY + areaHeight - (displayLines.length * lineHeight) - (areaHeight * 0.08);
-  const centerX = areaX + areaWidth / 2;
-  
-  ctx.save();
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  
-  displayLines.forEach((line, lineIndex) => {
-    const y = captionY + lineIndex * lineHeight;
-    
-    // Calculate total line width for centering
-    ctx.font = `bold ${fontSize}px Arial`;
-    const totalWidth = ctx.measureText(line.text).width;
-    let xPos = centerX - totalWidth / 2;
-    
-    // Draw each word
-    line.words.forEach((word, wordIndex) => {
-      const isActive = currentTime >= word.start && currentTime <= word.end + 0.1;
-      const wordText = word.text + (wordIndex < line.words.length - 1 ? ' ' : '');
-      const wordWidth = ctx.measureText(wordText).width;
-      
-      // Draw shadow/outline for readability
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-      ctx.lineWidth = 4;
-      ctx.lineJoin = 'round';
-      ctx.strokeText(wordText, xPos + wordWidth / 2, y);
-      
-      // Draw word with highlight if active
-      if (isActive) {
-        ctx.fillStyle = '#FFFF00'; // Yellow highlight for active word
-      } else {
-        ctx.fillStyle = '#FFFFFF'; // White for inactive
-      }
-      ctx.fillText(wordText, xPos + wordWidth / 2, y);
-      
-      xPos += wordWidth;
-    });
-  });
-  
-  ctx.restore();
-}
-
-/**
  * Process video using Canvas API with audio support
  * Outputs WebM with audio, then we'll handle conversion
  */
@@ -155,8 +56,7 @@ export async function processVideo(
   greenArea: GreenArea,
   settings: ProcessingSettings,
   videoId: string,
-  onProgress: ProgressCallback,
-  captionData?: CaptionData // Optional caption data for animated subtitles
+  onProgress: ProgressCallback
 ): Promise<Blob> {
   onProgress({
     videoId,
@@ -433,32 +333,25 @@ export async function processVideo(
     // Draw watermark if provided
     if (settings.watermark && settings.watermark.trim()) {
       const watermarkText = settings.watermark.trim();
-      // Position: 15% up from the bottom of the green area
-      const templateEndY = y + wh;
-      const watermarkY = templateEndY - (wh * 0.15);
+      // Position: 30% up from the bottom of the green area (where template ends)
+      const templateEndY = y + wh; // Bottom of green area
+      const watermarkY = templateEndY - (wh * 0.15); // 15% up from bottom
       
       ctx.save();
       ctx.font = '28px Arial';
-      ctx.fillStyle = 'rgba(128, 128, 128, 0.5)';
+      ctx.fillStyle = 'rgba(128, 128, 128, 0.5)'; // Medium gray, 50% opacity
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(watermarkText, 1080 / 2, watermarkY);
       ctx.restore();
     }
 
-    // Draw animated captions if provided
-    if (captionData && captionData.words.length > 0) {
-      const currentTime = video.currentTime - trimStart;
-      drawAnimatedCaptions(ctx, captionData, currentTime, x, y, ww, wh);
-    }
-
-    // Update progress - throttle to avoid excessive calls
+    // Update progress
     const currentProgress = video.currentTime - trimStart;
-    const progressPercent = Math.min(95, Math.round(20 + (currentProgress / effectiveDuration) * 75));
-    
+    const progress = 20 + (currentProgress / effectiveDuration) * 75;
     onProgress({
       videoId,
-      progress: progressPercent,
+      progress: Math.min(95, Math.round(progress)),
       stage: 'encoding',
       message: `Processando: ${Math.round((currentProgress / effectiveDuration) * 100)}%`,
     });
@@ -470,10 +363,11 @@ export async function processVideo(
     try {
       renderFrame();
     } catch {}
-    // Reduced timeout for faster completion - less lag
-    if (recorder.state === 'recording') {
-      recorder.stop();
-    }
+    setTimeout(() => {
+      if (recorder.state === 'recording') {
+        recorder.stop();
+      }
+    }, 300);
   };
 
   // Use requestVideoFrameCallback for precise frame sync when available
@@ -516,27 +410,28 @@ export async function processVideo(
         audioContext?.close();
       } catch {}
 
-      // Reduced timeout for faster response
-      if (chunks.length === 0) {
-        reject(new Error('Nenhum dado de vídeo foi capturado'));
-        return;
-      }
+      setTimeout(() => {
+        if (chunks.length === 0) {
+          reject(new Error('Nenhum dado de vídeo foi capturado'));
+          return;
+        }
 
-      const blob = new Blob(chunks, { type: recorder.mimeType || mimeType });
+        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType });
 
-      if (blob.size < 1000) {
-        reject(new Error('Vídeo gerado está vazio ou corrompido'));
-        return;
-      }
+        if (blob.size < 1000) {
+          reject(new Error('Vídeo gerado está vazio ou corrompido'));
+          return;
+        }
 
-      onProgress({
-        videoId,
-        progress: 100,
-        stage: 'done',
-        message: 'Concluído!',
-      });
+        onProgress({
+          videoId,
+          progress: 100,
+          stage: 'done',
+          message: 'Concluído!',
+        });
 
-      resolve(blob);
+        resolve(blob);
+      }, 200);
     };
 
     recorder.onerror = () => {

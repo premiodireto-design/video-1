@@ -9,12 +9,10 @@ import { useToast } from '@/hooks/use-toast';
 import {
   processVideo,
   type ProcessingSettings as ProcessingSettingsType,
-  type ProcessingProgress,
-  type CaptionData
+  type ProcessingProgress
 } from '@/lib/videoProcessor';
 import { convertWebMToMP4, loadFFmpegConverter } from '@/lib/videoConverter';
 import { type GreenArea } from '@/lib/greenDetection';
-import { transcribeVideo } from '@/lib/transcriptionService';
 
 export default function Dashboard() {
   const [templateFile, setTemplateFile] = useState<File | null>(null);
@@ -27,7 +25,6 @@ export default function Dashboard() {
     removeBlackBars: false,
     watermark: '',
     useAiFraming: true, // Enabled by default
-    useCaptions: false, // Disabled by default (user can enable)
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
@@ -79,32 +76,13 @@ export default function Dashboard() {
         ));
 
         try {
-          // Transcribe audio if captions are enabled
-          let captionData: CaptionData | undefined;
-          if (settings.useCaptions) {
-            updateVideoProgress({
-              videoId: video.id,
-              progress: 2,
-              stage: 'transcribing',
-              message: 'Transcrevendo áudio com IA...',
-            });
-            
-            try {
-              captionData = await transcribeVideo(video.file);
-              console.log('[Dashboard] Transcription result:', captionData?.text?.substring(0, 50));
-            } catch (transcribeError) {
-              console.warn('[Dashboard] Transcription failed, continuing without captions:', transcribeError);
-            }
-          }
-
           const outputBlob = await processVideo(
             video.file,
             templateFile,
             greenArea,
             settings,
             video.id,
-            updateVideoProgress,
-            captionData // Pass caption data if available
+            updateVideoProgress
           );
 
           // Update with output
@@ -123,9 +101,9 @@ export default function Dashboard() {
           ));
         }
         
-        // Reduced delay between videos for faster processing
+        // Small delay between videos to let browser recover resources
         if (i < videosToProcess.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 150));
+          await new Promise(resolve => setTimeout(resolve, 300));
         }
       }
 
