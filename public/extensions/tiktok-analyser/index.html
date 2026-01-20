@@ -294,12 +294,14 @@
     </div>
   </div>
 
-  <!-- JSZip (client-side) to generate ZIP in the browser -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- JSZip (local) to generate ZIP in the browser (avoids CSP/CDN issues) -->
+  <script src="/extensions/tiktok-analyser/vendor/jszip.min.js"></script>
   <script>
     (function () {
       const btn = document.getElementById('download-zip');
       if (!btn) return;
+
+      const base = '/extensions/tiktok-analyser/';
 
       const filesText = [
         'manifest.json',
@@ -320,16 +322,69 @@
       ];
 
       async function fetchAsText(path) {
-        const res = await fetch(path, { cache: 'no-store' });
-        if (!res.ok) throw new Error('Falha ao baixar ' + path + ' (HTTP ' + res.status + ')');
-        return await res.text();
+        const url = base + path;
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error('Falha ao baixar ' + url + ' (HTTP ' + res.status + ')');
+        const text = await res.text();
+        if (!text || text.trim().length === 0) throw new Error('Arquivo vazio: ' + url);
+        return text;
       }
 
       async function fetchAsArrayBuffer(path) {
-        const res = await fetch(path, { cache: 'no-store' });
-        if (!res.ok) throw new Error('Falha ao baixar ' + path + ' (HTTP ' + res.status + ')');
-        return await res.arrayBuffer();
+        const url = base + path;
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error('Falha ao baixar ' + url + ' (HTTP ' + res.status + ')');
+        const buf = await res.arrayBuffer();
+        if (!buf || buf.byteLength === 0) throw new Error('Arquivo vazio: ' + url);
+        return buf;
       }
+
+      function setLoading(isLoading) {
+        btn.disabled = isLoading;
+        btn.style.opacity = isLoading ? '0.75' : '1';
+        btn.style.cursor = isLoading ? 'progress' : 'pointer';
+        btn.querySelector('span:last-child').textContent = isLoading ? 'Gerando ZIP...' : 'Baixar Extensão (ZIP)';
+      }
+
+      btn.addEventListener('click', async () => {
+        try {
+          if (!window.JSZip) throw new Error('JSZip não carregou (bloqueio de script).');
+          setLoading(true);
+
+          const zip = new window.JSZip();
+
+          // Text files
+          for (const path of filesText) {
+            const content = await fetchAsText(path);
+            zip.file(path, content);
+          }
+
+          // Binary files
+          for (const path of filesBinary) {
+            const buf = await fetchAsArrayBuffer(path);
+            zip.file(path, buf);
+          }
+
+          const blob = await zip.generateAsync({ type: 'blob' });
+          if (!blob || blob.size === 0) throw new Error('ZIP gerado ficou vazio.');
+
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'tiktok-analyser.zip';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (e) {
+          console.error(e);
+          alert('Não foi possível gerar o ZIP da extensão.\n\nDetalhes: ' + (e && e.message ? e.message : String(e)));
+        } finally {
+          setLoading(false);
+        }
+      });
+    })();
+  </script>
 
       function setLoading(isLoading) {
         btn.disabled = isLoading;
