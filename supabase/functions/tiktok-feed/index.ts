@@ -290,7 +290,7 @@ serve(async (req) => {
     if (!username) {
       return new Response(
         JSON.stringify({ success: false, error: "Username é obrigatório" }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -299,9 +299,10 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({
           success: false,
-          error: "Cookie do TikTok não configurado. Configure seu cookie para acessar os vídeos.",
+          error:
+            "Cookie do TikTok não configurado. Configure seu cookie para acessar os vídeos.",
         }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 401 }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -309,20 +310,22 @@ serve(async (req) => {
     console.log(`=== Fetching TikTok feed for: ${cleanUsername}, limit: ${limit} ===`);
 
     const result = await tryMobileApi(cleanUsername, effectiveCookie);
-    
+
     if (result.videos.length === 0) {
+      // IMPORTANT: always return 200 so the client can display the error message,
+      // otherwise invoke() throws "Edge Function returned a non-2xx status code".
       return new Response(
         JSON.stringify({
           success: false,
           error: `Nenhum vídeo encontrado para @${cleanUsername}. Verifique se o perfil existe e está público, e se seu cookie está válido e atualizado.`,
         }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 404 }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     // Limit results
     const videos = result.videos.slice(0, Number(limit));
-    
+
     console.log(`=== Success: returning ${videos.length} videos ===`);
 
     return new Response(
@@ -339,9 +342,10 @@ serve(async (req) => {
     );
   } catch (error) {
     console.error("Error:", error);
+    // IMPORTANT: return 200 so the client gets a readable message.
     return new Response(
       JSON.stringify({ success: false, error: "Erro ao carregar perfil do TikTok" }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
