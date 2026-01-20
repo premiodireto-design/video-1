@@ -1,12 +1,12 @@
 // Content script for TikTok Analyser Pro
-// Runs on TikTok pages to extract video data and inject UI
+// Runs on TikTok pages to filter/sort videos directly on the page
 
-console.log('[TikTok Analyser] Content script loaded');
+console.log('[TikTok Analyser] Content script loaded v2');
 
-let panelVisible = false;
-let panelElement = null;
+let toolbarVisible = false;
+let toolbarElement = null;
 let extractedVideos = [];
-let filteredVideos = [];
+let videoElementsMap = new Map(); // Map video ID -> DOM element
 let isExtracting = false;
 let extractionAborted = false;
 let currentSort = { field: 'views', order: 'desc' };
@@ -19,6 +19,7 @@ let currentFilters = {
   minComments: 0,
   maxComments: Infinity
 };
+let selectedVideoIds = new Set();
 
 // Listen for messages from popup/background
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -29,7 +30,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ status: 'ok' });
       break;
     case 'openPanel':
-      togglePanel();
+      toggleToolbar();
       sendResponse({ success: true });
       break;
     case 'quickExtract':
@@ -58,115 +59,12 @@ function getUsername() {
   return match ? match[1] : null;
 }
 
-// Extract videos from the page
-async function extractVideosFromPage() {
-  const videos = [];
-  const seenIds = new Set();
-  
-  // Method 1: Try __UNIVERSAL_DATA_FOR_REHYDRATION__
-  try {
-    const scripts = document.querySelectorAll('script#__UNIVERSAL_DATA_FOR_REHYDRATION__');
-    for (const script of scripts) {
-      const data = JSON.parse(script.textContent);
-      const defaultScope = data?.['__DEFAULT_SCOPE__'];
-      const userDetail = defaultScope?.['webapp.user-detail'];
-      const itemList = userDetail?.itemList || [];
-      
-      for (const item of itemList) {
-        const video = parseVideoItem(item);
-        if (video.id && !seenIds.has(video.id)) {
-          seenIds.add(video.id);
-          videos.push(video);
-        }
-      }
-    }
-  } catch (e) {
-    console.log('[TikTok Analyser] Method 1 failed:', e);
-  }
-  
-  // Method 2: Try SIGI_STATE
-  if (videos.length === 0) {
-    try {
-      const scripts = document.querySelectorAll('script#SIGI_STATE');
-      for (const script of scripts) {
-        const data = JSON.parse(script.textContent);
-        const itemModule = data?.ItemModule || {};
-        
-        for (const key of Object.keys(itemModule)) {
-          const item = itemModule[key];
-          if (item && item.id && !seenIds.has(item.id)) {
-            seenIds.add(item.id);
-            videos.push(parseVideoItem(item));
-          }
-        }
-      }
-    } catch (e) {
-      console.log('[TikTok Analyser] Method 2 failed:', e);
-    }
-  }
-  
-  // Method 3: DOM fallback
-  if (videos.length === 0) {
-    const videoElements = document.querySelectorAll('[data-e2e="user-post-item"], [class*="DivItemContainer"]');
-    for (const el of videoElements) {
-      const link = el.querySelector('a[href*="/video/"]');
-      const img = el.querySelector('img');
-      const viewsEl = el.querySelector('[data-e2e="video-views"]');
-      
-      if (link) {
-        const videoId = link.href.match(/\/video\/(\d+)/)?.[1];
-        if (videoId && !seenIds.has(videoId)) {
-          seenIds.add(videoId);
-          videos.push({
-            id: videoId,
-            url: link.href,
-            thumbnail: img?.src || '',
-            views: parseCount(viewsEl?.textContent || '0'),
-            likes: 0,
-            comments: 0,
-            shares: 0,
-            description: '',
-            createTime: null,
-            downloadUrl: null,
-            status: 'unknown'
-          });
-        }
-      }
-    }
-  }
-  
-  return videos;
-}
-
-// Parse a video item from TikTok's data
-function parseVideoItem(item) {
-  const stats = item.stats || item.statsV2 || {};
-  const videoId = item.id || item.video?.id;
-  const author = item.author?.uniqueId || getUsername();
-  
-  return {
-    id: videoId,
-    url: `https://www.tiktok.com/@${author}/video/${videoId}`,
-    thumbnail: item.video?.cover || item.video?.dynamicCover || item.video?.originCover || '',
-    views: parseInt(stats.playCount || stats.viewCount || 0),
-    likes: parseInt(stats.diggCount || stats.likeCount || 0),
-    comments: parseInt(stats.commentCount || 0),
-    shares: parseInt(stats.shareCount || 0),
-    description: item.desc || '',
-    createTime: item.createTime ? new Date(item.createTime * 1000).toISOString() : null,
-    duration: item.video?.duration || 0,
-    downloadUrl: item.video?.playAddr || item.video?.downloadAddr || null,
-    author: author,
-    status: 'available'
-  };
-}
-
 // Parse count strings like "1.2M" to numbers
 function parseCount(str) {
   if (!str) return 0;
-  const cleaned = str.trim().toLowerCase();
-  const match = cleaned.match(/([\d.]+)([kmb])?/);
-  if (!match) return 0;
+  const cleaned = str.trim().toLowerCase().replace(/,/g, '.');
+  const match = cleaned.match(/([\d.]+)\s*([kmb])?/);
+  if (!match) return parseInt(str.replace(/\D/g, '')) || 0;
   
   let num = parseFloat(match[1]);
   const suffix = match[2];
@@ -185,129 +83,270 @@ function formatNumber(num) {
   return num.toString();
 }
 
-// Toggle the floating panel
-function togglePanel() {
-  if (panelVisible) {
-    closePanel();
+// Extract videos and map to DOM elements
+async function extractVideosFromPage() {
+  const videos = [];
+  const seenIds = new Set();
+  videoElementsMap.clear();
+  
+  // Get the video grid container
+  const videoContainers = document.querySelectorAll('[data-e2e="user-post-item-list"]');
+  const userPostItems = document.querySelectorAll('[data-e2e="user-post-item"]');
+  
+  // Also try other selectors
+  const allVideoCards = document.querySelectorAll('[data-e2e="user-post-item"], [class*="DivItemContainerV2"], [class*="DivItemContainer"]:not([class*="ItemContainerV2"])');
+  
+  console.log('[TikTok Analyser] Found video cards:', allVideoCards.length);
+  
+  // Try to get data from embedded JSON first
+  let jsonData = {};
+  try {
+    const scripts = document.querySelectorAll('script#__UNIVERSAL_DATA_FOR_REHYDRATION__');
+    for (const script of scripts) {
+      const data = JSON.parse(script.textContent);
+      const defaultScope = data?.['__DEFAULT_SCOPE__'];
+      const userDetail = defaultScope?.['webapp.user-detail'];
+      const itemList = userDetail?.itemList || [];
+      
+      for (const item of itemList) {
+        const stats = item.stats || item.statsV2 || {};
+        jsonData[item.id] = {
+          views: parseInt(stats.playCount || stats.viewCount || 0),
+          likes: parseInt(stats.diggCount || stats.likeCount || 0),
+          comments: parseInt(stats.commentCount || 0),
+          shares: parseInt(stats.shareCount || 0),
+          description: item.desc || '',
+          createTime: item.createTime ? new Date(item.createTime * 1000).toISOString() : null,
+          downloadUrl: item.video?.playAddr || item.video?.downloadAddr || null,
+          thumbnail: item.video?.cover || item.video?.dynamicCover || ''
+        };
+      }
+    }
+  } catch (e) {
+    console.log('[TikTok Analyser] JSON extraction failed:', e);
+  }
+  
+  // Also try SIGI_STATE
+  try {
+    const scripts = document.querySelectorAll('script#SIGI_STATE');
+    for (const script of scripts) {
+      const data = JSON.parse(script.textContent);
+      const itemModule = data?.ItemModule || {};
+      
+      for (const key of Object.keys(itemModule)) {
+        const item = itemModule[key];
+        if (item && item.id) {
+          const stats = item.stats || item.statsV2 || {};
+          jsonData[item.id] = {
+            views: parseInt(stats.playCount || stats.viewCount || 0),
+            likes: parseInt(stats.diggCount || stats.likeCount || 0),
+            comments: parseInt(stats.commentCount || 0),
+            shares: parseInt(stats.shareCount || 0),
+            description: item.desc || '',
+            createTime: item.createTime ? new Date(item.createTime * 1000).toISOString() : null,
+            downloadUrl: item.video?.playAddr || null,
+            thumbnail: item.video?.cover || ''
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.log('[TikTok Analyser] SIGI extraction failed:', e);
+  }
+  
+  // Now process DOM elements
+  for (const el of allVideoCards) {
+    const link = el.querySelector('a[href*="/video/"]');
+    if (!link) continue;
+    
+    const videoId = link.href.match(/\/video\/(\d+)/)?.[1];
+    if (!videoId || seenIds.has(videoId)) continue;
+    
+    seenIds.add(videoId);
+    videoElementsMap.set(videoId, el);
+    
+    // Try to get metrics from DOM
+    const viewsEl = el.querySelector('[data-e2e="video-views"], [class*="video-count"], strong');
+    const img = el.querySelector('img');
+    
+    // Get data from JSON if available, otherwise from DOM
+    const jsonInfo = jsonData[videoId] || {};
+    
+    videos.push({
+      id: videoId,
+      url: link.href,
+      thumbnail: jsonInfo.thumbnail || img?.src || '',
+      views: jsonInfo.views || parseCount(viewsEl?.textContent || '0'),
+      likes: jsonInfo.likes || 0,
+      comments: jsonInfo.comments || 0,
+      shares: jsonInfo.shares || 0,
+      description: jsonInfo.description || '',
+      createTime: jsonInfo.createTime || null,
+      downloadUrl: jsonInfo.downloadUrl || null,
+      author: getUsername(),
+      element: el
+    });
+  }
+  
+  console.log('[TikTok Analyser] Extracted videos:', videos.length);
+  return videos;
+}
+
+// Toggle toolbar
+function toggleToolbar() {
+  if (toolbarVisible) {
+    closeToolbar();
   } else {
-    openPanel();
+    openToolbar();
   }
 }
 
-// Open the floating panel
-function openPanel() {
-  if (panelElement) {
-    panelElement.remove();
-  }
-  
-  panelElement = document.createElement('div');
-  panelElement.id = 'tiktok-analyser-panel';
-  panelElement.innerHTML = createPanelHTML();
-  document.body.appendChild(panelElement);
-  
-  setupPanelEvents();
-  panelVisible = true;
-  
-  // Auto-start extraction
-  startExtraction();
-}
-
-// Close the panel
-function closePanel() {
-  if (panelElement) {
-    panelElement.remove();
-    panelElement = null;
-  }
-  panelVisible = false;
-  extractionAborted = true;
-}
-
-// Create panel HTML with advanced filters
-function createPanelHTML() {
+// Create toolbar HTML
+function createToolbarHTML() {
   return `
     <style>
-      #tiktok-analyser-panel {
+      #tiktok-analyser-toolbar {
         position: fixed;
         top: 0;
+        left: 0;
         right: 0;
-        width: 480px;
-        height: 100vh;
-        background: #0f0f23;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         z-index: 999999;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         color: #fff;
-        display: flex;
-        flex-direction: column;
-        box-shadow: -4px 0 20px rgba(0,0,0,0.5);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+        padding: 0;
       }
       
-      .tap-header {
-        padding: 16px;
-        background: linear-gradient(135deg, #1a1a3e 0%, #0f0f23 100%);
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-      }
-      
-      .tap-header-left {
+      .tat-main {
         display: flex;
         align-items: center;
         gap: 12px;
+        padding: 10px 16px;
+        flex-wrap: wrap;
       }
       
-      .tap-logo { font-size: 24px; }
-      .tap-title { font-size: 16px; font-weight: 600; }
-      .tap-username { font-size: 12px; color: #25f4ee; }
-      
-      .tap-close {
-        background: rgba(255,255,255,0.1);
-        border: none;
-        color: #fff;
-        width: 32px;
-        height: 32px;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 18px;
-      }
-      
-      .tap-close:hover { background: rgba(255,255,255,0.2); }
-      
-      .tap-stats {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
+      .tat-logo {
+        display: flex;
+        align-items: center;
         gap: 8px;
-        padding: 12px 16px;
-        background: rgba(255,255,255,0.02);
-        border-bottom: 1px solid rgba(255,255,255,0.1);
+        font-weight: 600;
+        font-size: 14px;
+        color: #25f4ee;
       }
       
-      .tap-stat { text-align: center; }
-      
-      .tap-stat-value {
-        font-size: 18px;
-        font-weight: 700;
-        background: linear-gradient(135deg, #25f4ee 0%, #fe2c55 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+      .tat-stats {
+        display: flex;
+        gap: 16px;
+        font-size: 12px;
+        color: rgba(255,255,255,0.7);
+        margin-left: auto;
       }
       
-      .tap-stat-label {
+      .tat-stat {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      
+      .tat-stat-value {
+        color: #25f4ee;
+        font-weight: 600;
+      }
+      
+      .tat-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 8px 16px 12px;
+        border-top: 1px solid rgba(255,255,255,0.1);
+        background: rgba(0,0,0,0.2);
+      }
+      
+      .tat-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 6px;
+      }
+      
+      .tat-label {
         font-size: 10px;
         color: rgba(255,255,255,0.5);
         text-transform: uppercase;
+        white-space: nowrap;
       }
       
-      .tap-progress {
+      .tat-input {
+        padding: 4px 8px;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 4px;
+        background: rgba(0,0,0,0.3);
+        color: #fff;
+        font-size: 11px;
+        width: 70px;
+      }
+      
+      .tat-input::placeholder { color: rgba(255,255,255,0.3); }
+      .tat-input:focus { outline: none; border-color: #25f4ee; }
+      
+      .tat-btn {
+        padding: 6px 10px;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 4px;
+        background: transparent;
+        color: rgba(255,255,255,0.8);
+        font-size: 11px;
+        cursor: pointer;
+        transition: all 0.2s;
+        white-space: nowrap;
+      }
+      
+      .tat-btn:hover { background: rgba(255,255,255,0.1); }
+      
+      .tat-btn.active {
+        background: rgba(37, 244, 238, 0.2);
+        color: #25f4ee;
+        border-color: #25f4ee;
+      }
+      
+      .tat-btn-primary {
+        background: linear-gradient(135deg, #fe2c55 0%, #ff6b6b 100%);
+        border: none;
+        color: #fff;
+        font-weight: 500;
+      }
+      
+      .tat-btn-primary:hover { opacity: 0.9; }
+      
+      .tat-btn-success {
+        background: linear-gradient(135deg, #22c55e 0%, #4ade80 100%);
+        border: none;
+        color: #fff;
+      }
+      
+      .tat-close {
+        background: none;
+        border: none;
+        color: rgba(255,255,255,0.6);
+        font-size: 18px;
+        cursor: pointer;
+        padding: 4px 8px;
+      }
+      
+      .tat-close:hover { color: #fff; }
+      
+      .tat-progress {
+        display: none;
         padding: 8px 16px;
         background: rgba(37, 244, 238, 0.1);
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-        display: none;
       }
       
-      .tap-progress.active { display: block; }
+      .tat-progress.active { display: block; }
       
-      .tap-progress-bar {
+      .tat-progress-bar {
         height: 4px;
         background: rgba(255,255,255,0.1);
         border-radius: 2px;
@@ -315,546 +354,306 @@ function createPanelHTML() {
         margin-bottom: 4px;
       }
       
-      .tap-progress-fill {
+      .tat-progress-fill {
         height: 100%;
         background: linear-gradient(90deg, #25f4ee 0%, #fe2c55 100%);
         width: 0%;
         transition: width 0.3s;
       }
       
-      .tap-progress-text {
+      .tat-progress-text {
         font-size: 11px;
         color: rgba(255,255,255,0.6);
       }
-      
-      /* Filter Section */
-      .tap-filters-section {
-        padding: 12px 16px;
-        background: rgba(255,255,255,0.02);
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-      }
-      
-      .tap-filters-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 12px;
-      }
-      
-      .tap-filters-title {
-        font-size: 12px;
-        font-weight: 600;
-        color: rgba(255,255,255,0.8);
-      }
-      
-      .tap-filters-toggle {
-        font-size: 11px;
-        color: #25f4ee;
-        background: none;
-        border: none;
-        cursor: pointer;
-      }
-      
-      .tap-filters-grid {
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 8px;
-      }
-      
-      .tap-filter-item {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      
-      .tap-filter-label {
-        font-size: 10px;
-        color: rgba(255,255,255,0.5);
-        text-transform: uppercase;
-      }
-      
-      .tap-filter-input {
-        padding: 6px 10px;
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 4px;
-        background: rgba(255,255,255,0.05);
-        color: #fff;
-        font-size: 12px;
-        width: 100%;
-      }
-      
-      .tap-filter-input::placeholder { color: rgba(255,255,255,0.3); }
-      
-      .tap-filter-input:focus {
-        outline: none;
-        border-color: #25f4ee;
-      }
-      
-      /* Sort Section */
-      .tap-sort-section {
-        padding: 10px 16px;
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-        flex-wrap: wrap;
-      }
-      
-      .tap-sort-label {
-        font-size: 11px;
-        color: rgba(255,255,255,0.5);
-        margin-right: 4px;
-      }
-      
-      .tap-sort-btn {
-        padding: 5px 10px;
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 4px;
-        background: transparent;
-        color: rgba(255,255,255,0.6);
-        font-size: 11px;
-        cursor: pointer;
-        transition: all 0.2s;
-      }
-      
-      .tap-sort-btn:hover {
-        background: rgba(255,255,255,0.1);
-      }
-      
-      .tap-sort-btn.active {
-        background: rgba(37, 244, 238, 0.2);
-        color: #25f4ee;
-        border-color: #25f4ee;
-      }
-      
-      .tap-order-btn {
-        padding: 5px 8px;
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 4px;
-        background: transparent;
-        color: rgba(255,255,255,0.6);
-        font-size: 11px;
-        cursor: pointer;
-        margin-left: auto;
-      }
-      
-      .tap-order-btn:hover { background: rgba(255,255,255,0.1); }
-      
-      /* Controls */
-      .tap-controls {
-        padding: 10px 16px;
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-      }
-      
-      .tap-btn {
-        padding: 7px 12px;
-        border: none;
-        border-radius: 6px;
-        font-size: 11px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.2s;
-        display: flex;
-        align-items: center;
-        gap: 5px;
-      }
-      
-      .tap-btn-primary {
-        background: linear-gradient(135deg, #fe2c55 0%, #ff6b6b 100%);
-        color: #fff;
-      }
-      
-      .tap-btn-secondary {
-        background: rgba(255,255,255,0.1);
-        color: #fff;
-      }
-      
-      .tap-btn-success {
-        background: linear-gradient(135deg, #22c55e 0%, #4ade80 100%);
-        color: #fff;
-      }
-      
-      .tap-btn:hover { transform: translateY(-1px); }
-      .tap-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-      
-      /* Search */
-      .tap-search-box {
-        padding: 8px 16px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-      }
-      
-      .tap-search {
-        width: 100%;
-        padding: 8px 12px;
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 6px;
-        background: rgba(255,255,255,0.05);
-        color: #fff;
-        font-size: 12px;
-      }
-      
-      .tap-search::placeholder { color: rgba(255,255,255,0.4); }
-      
-      /* Videos List */
-      .tap-videos {
-        flex: 1;
-        overflow-y: auto;
-        padding: 8px;
-      }
-      
-      .tap-video-item {
-        display: flex;
-        gap: 10px;
-        padding: 10px;
-        background: rgba(255,255,255,0.03);
-        border-radius: 8px;
-        margin-bottom: 6px;
-        cursor: pointer;
-        transition: all 0.2s;
-        position: relative;
-      }
-      
-      .tap-video-item:hover { background: rgba(255,255,255,0.08); }
-      
-      .tap-video-item.selected {
-        background: rgba(37, 244, 238, 0.15);
-        border: 1px solid rgba(37, 244, 238, 0.3);
-      }
-      
-      .tap-video-checkbox {
-        position: absolute;
-        top: 6px;
-        left: 6px;
-        width: 16px;
-        height: 16px;
-        border: 2px solid rgba(255,255,255,0.3);
-        border-radius: 3px;
-        background: rgba(0,0,0,0.3);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 10px;
-        z-index: 1;
-      }
-      
-      .tap-video-item.selected .tap-video-checkbox {
-        background: #25f4ee;
-        border-color: #25f4ee;
-      }
-      
-      .tap-video-thumb {
-        width: 55px;
-        height: 75px;
-        border-radius: 6px;
-        object-fit: cover;
-        background: rgba(255,255,255,0.1);
-      }
-      
-      .tap-video-info { flex: 1; min-width: 0; }
-      
-      .tap-video-desc {
-        font-size: 11px;
-        color: rgba(255,255,255,0.9);
-        margin-bottom: 6px;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-        overflow: hidden;
-      }
-      
-      .tap-video-metrics {
-        display: flex;
-        gap: 10px;
-        font-size: 10px;
-        color: rgba(255,255,255,0.5);
-      }
-      
-      .tap-video-link {
-        font-size: 9px;
-        color: #25f4ee;
-        margin-top: 4px;
-        word-break: break-all;
-      }
-      
-      .tap-video-link a {
-        color: #25f4ee;
-        text-decoration: none;
-      }
-      
-      .tap-video-link a:hover { text-decoration: underline; }
-      
-      .tap-empty {
-        text-align: center;
-        padding: 40px;
-        color: rgba(255,255,255,0.4);
-      }
-      
-      /* Footer */
-      .tap-footer {
-        padding: 12px 16px;
-        background: rgba(255,255,255,0.02);
-        border-top: 1px solid rgba(255,255,255,0.1);
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-      
-      .tap-footer .tap-btn { flex: 1; justify-content: center; min-width: 100px; }
       
       /* Download Modal */
-      .tap-modal {
+      .tat-modal {
         position: fixed;
         top: 0;
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0,0,0,0.8);
+        background: rgba(0,0,0,0.85);
         display: none;
         align-items: center;
         justify-content: center;
         z-index: 9999999;
       }
       
-      .tap-modal.active { display: flex; }
+      .tat-modal.active { display: flex; }
       
-      .tap-modal-content {
-        background: #1a1a3e;
+      .tat-modal-content {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         padding: 24px;
         border-radius: 12px;
-        max-width: 400px;
+        max-width: 450px;
         width: 90%;
+        border: 1px solid rgba(255,255,255,0.1);
       }
       
-      .tap-modal-title {
+      .tat-modal-title {
         font-size: 16px;
         font-weight: 600;
         margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
       
-      .tap-modal-progress {
-        height: 6px;
+      .tat-modal-progress {
+        height: 8px;
         background: rgba(255,255,255,0.1);
-        border-radius: 3px;
+        border-radius: 4px;
         margin-bottom: 12px;
         overflow: hidden;
       }
       
-      .tap-modal-progress-fill {
+      .tat-modal-progress-fill {
         height: 100%;
         background: linear-gradient(90deg, #25f4ee 0%, #fe2c55 100%);
         width: 0%;
         transition: width 0.3s;
       }
       
-      .tap-modal-text {
+      .tat-modal-text {
         font-size: 13px;
         color: rgba(255,255,255,0.7);
-        margin-bottom: 16px;
+        margin-bottom: 8px;
       }
       
-      .tap-modal-actions {
+      .tat-modal-log {
+        max-height: 150px;
+        overflow-y: auto;
+        background: rgba(0,0,0,0.3);
+        padding: 10px;
+        border-radius: 6px;
+        font-size: 11px;
+        color: rgba(255,255,255,0.5);
+        margin-bottom: 16px;
+        font-family: monospace;
+      }
+      
+      .tat-modal-log-item { margin-bottom: 4px; }
+      .tat-modal-log-item.success { color: #4ade80; }
+      .tat-modal-log-item.error { color: #f87171; }
+      
+      .tat-modal-actions {
         display: flex;
         gap: 8px;
         justify-content: flex-end;
       }
+      
+      /* Body offset when toolbar is visible */
+      body.tat-toolbar-active {
+        margin-top: 100px !important;
+      }
+      
+      /* Video card selection overlay */
+      .tat-video-selected {
+        position: relative;
+      }
+      
+      .tat-video-selected::before {
+        content: '✓';
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        width: 24px;
+        height: 24px;
+        background: #25f4ee;
+        color: #000;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: bold;
+        z-index: 10;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      }
+      
+      .tat-video-selected::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        border: 3px solid #25f4ee;
+        border-radius: 8px;
+        pointer-events: none;
+        z-index: 9;
+      }
+      
+      /* Hidden videos */
+      .tat-video-hidden {
+        display: none !important;
+      }
     </style>
     
-    <div class="tap-header">
-      <div class="tap-header-left">
-        <span class="tap-logo">📊</span>
-        <div>
-          <div class="tap-title">TikTok Analyser Pro</div>
-          <div class="tap-username">@${getUsername() || 'unknown'}</div>
+    <div class="tat-main">
+      <div class="tat-logo">
+        📊 TikTok Analyser Pro
+      </div>
+      <span style="font-size: 11px; color: rgba(255,255,255,0.4)">@${getUsername() || 'unknown'}</span>
+      
+      <div class="tat-stats">
+        <div class="tat-stat">
+          🎬 <span class="tat-stat-value" id="tat-total">0</span> vídeos
+        </div>
+        <div class="tat-stat">
+          🎯 <span class="tat-stat-value" id="tat-visible">0</span> visíveis
+        </div>
+        <div class="tat-stat">
+          ☑️ <span class="tat-stat-value" id="tat-selected">0</span> selecionados
         </div>
       </div>
-      <button class="tap-close" id="tap-close">✕</button>
+      
+      <button class="tat-close" id="tat-close">✕</button>
     </div>
     
-    <div class="tap-stats">
-      <div class="tap-stat">
-        <div class="tap-stat-value" id="tap-total-videos">0</div>
-        <div class="tap-stat-label">Vídeos</div>
+    <div class="tat-progress" id="tat-progress">
+      <div class="tat-progress-bar">
+        <div class="tat-progress-fill" id="tat-progress-fill"></div>
       </div>
-      <div class="tap-stat">
-        <div class="tap-stat-value" id="tap-filtered-count">0</div>
-        <div class="tap-stat-label">Filtrados</div>
-      </div>
-      <div class="tap-stat">
-        <div class="tap-stat-value" id="tap-selected-count">0</div>
-        <div class="tap-stat-label">Selecionados</div>
-      </div>
-      <div class="tap-stat">
-        <div class="tap-stat-value" id="tap-total-views">0</div>
-        <div class="tap-stat-label">Views</div>
-      </div>
+      <div class="tat-progress-text" id="tat-progress-text">Carregando...</div>
     </div>
     
-    <div class="tap-progress" id="tap-progress">
-      <div class="tap-progress-bar">
-        <div class="tap-progress-fill" id="tap-progress-fill"></div>
+    <div class="tat-controls">
+      <!-- Sort -->
+      <div class="tat-group">
+        <span class="tat-label">Ordenar:</span>
+        <button class="tat-btn active" data-sort="views">👀 Views</button>
+        <button class="tat-btn" data-sort="likes">❤️ Likes</button>
+        <button class="tat-btn" data-sort="comments">💬 Coment.</button>
+        <button class="tat-btn" data-sort="date">📅 Data</button>
+        <button class="tat-btn" id="tat-order">⬇️</button>
       </div>
-      <div class="tap-progress-text" id="tap-progress-text">Carregando vídeos...</div>
-    </div>
-    
-    <!-- Filters Section -->
-    <div class="tap-filters-section">
-      <div class="tap-filters-header">
-        <span class="tap-filters-title">🎚️ Filtros</span>
-        <button class="tap-filters-toggle" id="tap-clear-filters">Limpar</button>
+      
+      <!-- Filters -->
+      <div class="tat-group">
+        <span class="tat-label">Views:</span>
+        <input type="number" class="tat-input" id="f-min-views" placeholder="Min">
+        <span>-</span>
+        <input type="number" class="tat-input" id="f-max-views" placeholder="Max">
       </div>
-      <div class="tap-filters-grid">
-        <div class="tap-filter-item">
-          <label class="tap-filter-label">Min Views</label>
-          <input type="number" class="tap-filter-input" id="filter-min-views" placeholder="0">
-        </div>
-        <div class="tap-filter-item">
-          <label class="tap-filter-label">Max Views</label>
-          <input type="number" class="tap-filter-input" id="filter-max-views" placeholder="∞">
-        </div>
-        <div class="tap-filter-item">
-          <label class="tap-filter-label">Min Likes</label>
-          <input type="number" class="tap-filter-input" id="filter-min-likes" placeholder="0">
-        </div>
-        <div class="tap-filter-item">
-          <label class="tap-filter-label">Max Likes</label>
-          <input type="number" class="tap-filter-input" id="filter-max-likes" placeholder="∞">
-        </div>
-        <div class="tap-filter-item">
-          <label class="tap-filter-label">Min Comentários</label>
-          <input type="number" class="tap-filter-input" id="filter-min-comments" placeholder="0">
-        </div>
-        <div class="tap-filter-item">
-          <label class="tap-filter-label">Max Comentários</label>
-          <input type="number" class="tap-filter-input" id="filter-max-comments" placeholder="∞">
-        </div>
+      
+      <div class="tat-group">
+        <span class="tat-label">Likes:</span>
+        <input type="number" class="tat-input" id="f-min-likes" placeholder="Min">
+        <span>-</span>
+        <input type="number" class="tat-input" id="f-max-likes" placeholder="Max">
       </div>
-    </div>
-    
-    <!-- Sort Section -->
-    <div class="tap-sort-section">
-      <span class="tap-sort-label">Ordenar:</span>
-      <button class="tap-sort-btn active" data-sort="views">👀 Views</button>
-      <button class="tap-sort-btn" data-sort="likes">❤️ Likes</button>
-      <button class="tap-sort-btn" data-sort="comments">💬 Comentários</button>
-      <button class="tap-sort-btn" data-sort="date">📅 Data</button>
-      <button class="tap-order-btn" id="tap-order-toggle">⬇️ Maior → Menor</button>
-    </div>
-    
-    <!-- Controls -->
-    <div class="tap-controls">
-      <button class="tap-btn tap-btn-success" id="tap-load-all">
-        🔄 Carregar TODOS
-      </button>
-      <button class="tap-btn tap-btn-secondary" id="tap-select-all">
-        ☑️ Selecionar Todos
-      </button>
-      <button class="tap-btn tap-btn-secondary" id="tap-select-filtered">
-        🎯 Selecionar Filtrados
-      </button>
-      <button class="tap-btn tap-btn-secondary" id="tap-clear-selection">
-        ✖️ Limpar
-      </button>
-    </div>
-    
-    <!-- Search -->
-    <div class="tap-search-box">
-      <input type="text" class="tap-search" id="tap-search" placeholder="🔍 Buscar por descrição...">
-    </div>
-    
-    <!-- Videos List -->
-    <div class="tap-videos" id="tap-videos">
-      <div class="tap-empty">
-        <p>Carregando vídeos do perfil...</p>
+      
+      <div class="tat-group">
+        <span class="tat-label">Coment.:</span>
+        <input type="number" class="tat-input" id="f-min-comments" placeholder="Min">
+        <span>-</span>
+        <input type="number" class="tat-input" id="f-max-comments" placeholder="Max">
       </div>
-    </div>
-    
-    <!-- Footer -->
-    <div class="tap-footer">
-      <button class="tap-btn tap-btn-primary" id="tap-download-videos" disabled>
-        📥 Baixar Vídeos
-      </button>
-      <button class="tap-btn tap-btn-secondary" id="tap-export-csv">
-        📋 Exportar CSV
-      </button>
-      <button class="tap-btn tap-btn-secondary" id="tap-export-json">
-        📄 JSON
-      </button>
+      
+      <button class="tat-btn" id="tat-apply-filter">🔍 Aplicar</button>
+      <button class="tat-btn" id="tat-clear-filter">❌ Limpar</button>
+      
+      <!-- Actions -->
+      <div class="tat-group" style="margin-left: auto;">
+        <button class="tat-btn tat-btn-success" id="tat-load-all">🔄 Carregar TODOS</button>
+        <button class="tat-btn" id="tat-select-visible">☑️ Sel. Visíveis</button>
+        <button class="tat-btn" id="tat-clear-selection">✖️ Limpar Sel.</button>
+      </div>
+      
+      <div class="tat-group">
+        <button class="tat-btn tat-btn-primary" id="tat-download-zip" disabled>📥 Baixar ZIP</button>
+        <button class="tat-btn" id="tat-export-csv">📋 CSV</button>
+      </div>
     </div>
     
     <!-- Download Modal -->
-    <div class="tap-modal" id="tap-download-modal">
-      <div class="tap-modal-content">
-        <div class="tap-modal-title">📥 Baixando Vídeos</div>
-        <div class="tap-modal-progress">
-          <div class="tap-modal-progress-fill" id="tap-dl-progress"></div>
+    <div class="tat-modal" id="tat-modal">
+      <div class="tat-modal-content">
+        <div class="tat-modal-title">📥 Baixando Vídeos</div>
+        <div class="tat-modal-progress">
+          <div class="tat-modal-progress-fill" id="tat-dl-progress"></div>
         </div>
-        <div class="tap-modal-text" id="tap-dl-text">Preparando...</div>
-        <div class="tap-modal-actions">
-          <button class="tap-btn tap-btn-secondary" id="tap-dl-cancel">Cancelar</button>
+        <div class="tat-modal-text" id="tat-dl-text">Preparando...</div>
+        <div class="tat-modal-log" id="tat-dl-log"></div>
+        <div class="tat-modal-actions">
+          <button class="tat-btn" id="tat-dl-cancel">Cancelar</button>
         </div>
       </div>
     </div>
   `;
 }
 
-// Setup panel event listeners
-function setupPanelEvents() {
-  const panel = panelElement;
+// Open toolbar
+function openToolbar() {
+  if (toolbarElement) {
+    toolbarElement.remove();
+  }
+  
+  toolbarElement = document.createElement('div');
+  toolbarElement.id = 'tiktok-analyser-toolbar';
+  toolbarElement.innerHTML = createToolbarHTML();
+  document.body.insertBefore(toolbarElement, document.body.firstChild);
+  document.body.classList.add('tat-toolbar-active');
+  
+  setupToolbarEvents();
+  toolbarVisible = true;
+  
+  // Start extraction
+  startExtraction();
+}
+
+// Close toolbar
+function closeToolbar() {
+  if (toolbarElement) {
+    toolbarElement.remove();
+    toolbarElement = null;
+  }
+  document.body.classList.remove('tat-toolbar-active');
+  
+  // Remove selection from video cards
+  document.querySelectorAll('.tat-video-selected, .tat-video-hidden').forEach(el => {
+    el.classList.remove('tat-video-selected', 'tat-video-hidden');
+  });
+  
+  toolbarVisible = false;
+  extractionAborted = true;
+  selectedVideoIds.clear();
+}
+
+// Setup events
+function setupToolbarEvents() {
+  const toolbar = toolbarElement;
   
   // Close
-  panel.querySelector('#tap-close').addEventListener('click', closePanel);
+  toolbar.querySelector('#tat-close').addEventListener('click', closeToolbar);
   
-  // Load all videos
-  panel.querySelector('#tap-load-all').addEventListener('click', loadAllVideos);
-  
-  // Select all (from original list)
-  panel.querySelector('#tap-select-all').addEventListener('click', () => {
-    extractedVideos.forEach(v => v.selected = true);
-    applyFiltersAndSort();
-  });
-  
-  // Select filtered only
-  panel.querySelector('#tap-select-filtered').addEventListener('click', () => {
-    extractedVideos.forEach(v => v.selected = false);
-    filteredVideos.forEach(v => v.selected = true);
-    applyFiltersAndSort();
-  });
-  
-  // Clear selection
-  panel.querySelector('#tap-clear-selection').addEventListener('click', () => {
-    extractedVideos.forEach(v => v.selected = false);
-    applyFiltersAndSort();
-  });
-  
-  // Search
-  panel.querySelector('#tap-search').addEventListener('input', (e) => {
-    currentFilters.search = e.target.value;
-    applyFiltersAndSort();
-  });
-  
-  // Filter inputs
-  const filterInputs = [
-    { id: 'filter-min-views', key: 'minViews', default: 0 },
-    { id: 'filter-max-views', key: 'maxViews', default: Infinity },
-    { id: 'filter-min-likes', key: 'minLikes', default: 0 },
-    { id: 'filter-max-likes', key: 'maxLikes', default: Infinity },
-    { id: 'filter-min-comments', key: 'minComments', default: 0 },
-    { id: 'filter-max-comments', key: 'maxComments', default: Infinity }
-  ];
-  
-  filterInputs.forEach(({ id, key, default: def }) => {
-    panel.querySelector(`#${id}`).addEventListener('input', (e) => {
-      const val = e.target.value.trim();
-      currentFilters[key] = val === '' ? def : parseInt(val) || def;
+  // Sort buttons
+  toolbar.querySelectorAll('[data-sort]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      toolbar.querySelectorAll('[data-sort]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentSort.field = btn.dataset.sort;
       applyFiltersAndSort();
     });
   });
   
-  // Clear filters
-  panel.querySelector('#tap-clear-filters').addEventListener('click', () => {
+  // Order toggle
+  toolbar.querySelector('#tat-order').addEventListener('click', (e) => {
+    currentSort.order = currentSort.order === 'desc' ? 'asc' : 'desc';
+    e.target.textContent = currentSort.order === 'desc' ? '⬇️' : '⬆️';
+    applyFiltersAndSort();
+  });
+  
+  // Apply filter
+  toolbar.querySelector('#tat-apply-filter').addEventListener('click', () => {
+    readFiltersFromInputs();
+    applyFiltersAndSort();
+  });
+  
+  // Clear filter
+  toolbar.querySelector('#tat-clear-filter').addEventListener('click', () => {
     currentFilters = {
       search: '',
       minViews: 0,
@@ -864,53 +663,65 @@ function setupPanelEvents() {
       minComments: 0,
       maxComments: Infinity
     };
-    panel.querySelector('#tap-search').value = '';
-    filterInputs.forEach(({ id }) => {
-      panel.querySelector(`#${id}`).value = '';
-    });
+    toolbar.querySelectorAll('.tat-input').forEach(input => input.value = '');
     applyFiltersAndSort();
   });
   
-  // Sort buttons
-  panel.querySelectorAll('.tap-sort-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      panel.querySelectorAll('.tap-sort-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentSort.field = btn.dataset.sort;
-      applyFiltersAndSort();
+  // Enter key on inputs
+  toolbar.querySelectorAll('.tat-input').forEach(input => {
+    input.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        readFiltersFromInputs();
+        applyFiltersAndSort();
+      }
     });
   });
   
-  // Order toggle
-  panel.querySelector('#tap-order-toggle').addEventListener('click', (e) => {
-    currentSort.order = currentSort.order === 'desc' ? 'asc' : 'desc';
-    e.target.textContent = currentSort.order === 'desc' ? '⬇️ Maior → Menor' : '⬆️ Menor → Maior';
-    applyFiltersAndSort();
-  });
+  // Load all
+  toolbar.querySelector('#tat-load-all').addEventListener('click', loadAllVideos);
   
-  // Download videos
-  panel.querySelector('#tap-download-videos').addEventListener('click', downloadVideos);
+  // Select visible
+  toolbar.querySelector('#tat-select-visible').addEventListener('click', selectVisibleVideos);
+  
+  // Clear selection
+  toolbar.querySelector('#tat-clear-selection').addEventListener('click', clearSelection);
+  
+  // Download ZIP
+  toolbar.querySelector('#tat-download-zip').addEventListener('click', downloadVideosAsZip);
   
   // Export CSV
-  panel.querySelector('#tap-export-csv').addEventListener('click', exportCSV);
+  toolbar.querySelector('#tat-export-csv').addEventListener('click', exportCSV);
   
-  // Export JSON
-  panel.querySelector('#tap-export-json').addEventListener('click', exportJSON);
-  
-  // Download modal cancel
-  panel.querySelector('#tap-dl-cancel').addEventListener('click', () => {
-    panel.querySelector('#tap-download-modal').classList.remove('active');
+  // Modal cancel
+  toolbar.querySelector('#tat-dl-cancel').addEventListener('click', () => {
+    extractionAborted = true;
+    toolbar.querySelector('#tat-modal').classList.remove('active');
   });
 }
 
-// Apply filters and sort
+// Read filters from inputs
+function readFiltersFromInputs() {
+  const toolbar = toolbarElement;
+  
+  const minViews = toolbar.querySelector('#f-min-views').value;
+  const maxViews = toolbar.querySelector('#f-max-views').value;
+  const minLikes = toolbar.querySelector('#f-min-likes').value;
+  const maxLikes = toolbar.querySelector('#f-max-likes').value;
+  const minComments = toolbar.querySelector('#f-min-comments').value;
+  const maxComments = toolbar.querySelector('#f-max-comments').value;
+  
+  currentFilters.minViews = minViews ? parseInt(minViews) : 0;
+  currentFilters.maxViews = maxViews ? parseInt(maxViews) : Infinity;
+  currentFilters.minLikes = minLikes ? parseInt(minLikes) : 0;
+  currentFilters.maxLikes = maxLikes ? parseInt(maxLikes) : Infinity;
+  currentFilters.minComments = minComments ? parseInt(minComments) : 0;
+  currentFilters.maxComments = maxComments ? parseInt(maxComments) : Infinity;
+}
+
+// Apply filters and sort - reorders actual DOM elements
 function applyFiltersAndSort() {
-  // Filter
-  filteredVideos = extractedVideos.filter(v => {
-    if (currentFilters.search) {
-      const search = currentFilters.search.toLowerCase();
-      if (!v.description.toLowerCase().includes(search)) return false;
-    }
+  // Filter videos
+  const filtered = extractedVideos.filter(v => {
     if (v.views < currentFilters.minViews) return false;
     if (v.views > currentFilters.maxViews) return false;
     if (v.likes < currentFilters.minLikes) return false;
@@ -921,7 +732,7 @@ function applyFiltersAndSort() {
   });
   
   // Sort
-  filteredVideos.sort((a, b) => {
+  filtered.sort((a, b) => {
     let valA, valB;
     switch (currentSort.field) {
       case 'views':
@@ -940,23 +751,116 @@ function applyFiltersAndSort() {
     return currentSort.order === 'desc' ? valB - valA : valA - valB;
   });
   
-  renderVideos();
+  // Get the parent container of video cards
+  const videoGrid = document.querySelector('[data-e2e="user-post-item-list"]');
+  
+  if (videoGrid) {
+    // Hide all videos first
+    extractedVideos.forEach(v => {
+      const el = videoElementsMap.get(v.id);
+      if (el) {
+        el.classList.add('tat-video-hidden');
+      }
+    });
+    
+    // Show and reorder filtered videos
+    filtered.forEach((video, index) => {
+      const el = videoElementsMap.get(video.id);
+      if (el) {
+        el.classList.remove('tat-video-hidden');
+        el.style.order = index;
+        
+        // Update selection visual
+        if (selectedVideoIds.has(video.id)) {
+          el.classList.add('tat-video-selected');
+        } else {
+          el.classList.remove('tat-video-selected');
+        }
+      }
+    });
+    
+    // Make grid use flexbox order
+    videoGrid.style.display = 'flex';
+    videoGrid.style.flexWrap = 'wrap';
+  } else {
+    // Fallback: just toggle visibility
+    extractedVideos.forEach(v => {
+      const el = videoElementsMap.get(v.id);
+      if (el) {
+        const isVisible = filtered.some(f => f.id === v.id);
+        el.classList.toggle('tat-video-hidden', !isVisible);
+        
+        if (selectedVideoIds.has(v.id)) {
+          el.classList.add('tat-video-selected');
+        } else {
+          el.classList.remove('tat-video-selected');
+        }
+      }
+    });
+  }
+  
+  // Setup click handlers for video selection
+  extractedVideos.forEach(video => {
+    const el = videoElementsMap.get(video.id);
+    if (el && !el.hasAttribute('data-tat-click')) {
+      el.setAttribute('data-tat-click', 'true');
+      el.style.cursor = 'pointer';
+      el.style.position = 'relative';
+      
+      el.addEventListener('click', (e) => {
+        // Don't interfere with links
+        if (e.target.tagName === 'A' || e.target.closest('a')) return;
+        
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (selectedVideoIds.has(video.id)) {
+          selectedVideoIds.delete(video.id);
+          el.classList.remove('tat-video-selected');
+        } else {
+          selectedVideoIds.add(video.id);
+          el.classList.add('tat-video-selected');
+        }
+        
+        updateStats();
+      });
+    }
+  });
+  
   updateStats();
+  
+  // Store filtered for export
+  window._tatFilteredVideos = filtered;
+}
+
+// Update stats
+function updateStats() {
+  if (!toolbarElement) return;
+  
+  const visibleCount = window._tatFilteredVideos?.length || 0;
+  
+  toolbarElement.querySelector('#tat-total').textContent = extractedVideos.length;
+  toolbarElement.querySelector('#tat-visible').textContent = visibleCount;
+  toolbarElement.querySelector('#tat-selected').textContent = selectedVideoIds.size;
+  
+  const downloadBtn = toolbarElement.querySelector('#tat-download-zip');
+  downloadBtn.disabled = selectedVideoIds.size === 0;
+  downloadBtn.textContent = selectedVideoIds.size > 0 
+    ? `📥 Baixar ${selectedVideoIds.size} ZIP` 
+    : '📥 Baixar ZIP';
 }
 
 // Start extraction
 async function startExtraction() {
   isExtracting = true;
   extractionAborted = false;
-  extractedVideos = [];
   
   showProgress(true);
-  updateProgress(0, 'Iniciando extração...');
+  updateProgress(20, 'Extraindo vídeos da página...');
   
-  const initialVideos = await extractVideosFromPage();
-  extractedVideos = initialVideos.map(v => ({ ...v, selected: false }));
+  extractedVideos = await extractVideosFromPage();
   
-  updateProgress(50, `${extractedVideos.length} vídeos encontrados`);
+  updateProgress(60, `${extractedVideos.length} vídeos encontrados. Scroll inicial...`);
   
   // Initial scroll to load more
   await autoScroll(3);
@@ -966,43 +870,41 @@ async function startExtraction() {
   const existingIds = new Set(extractedVideos.map(v => v.id));
   for (const video of moreVideos) {
     if (!existingIds.has(video.id)) {
-      extractedVideos.push({ ...video, selected: false });
+      extractedVideos.push(video);
     }
   }
   
-  showProgress(false);
-  isExtracting = false;
-  
-  applyFiltersAndSort();
-  
-  // Cache results
-  const username = getUsername();
-  if (username) {
-    chrome.storage.local.set({
-      [`profile_${username}`]: {
-        videos: extractedVideos,
-        timestamp: Date.now()
-      }
-    });
+  // Rebuild map
+  for (const v of extractedVideos) {
+    if (!videoElementsMap.has(v.id) && v.element) {
+      videoElementsMap.set(v.id, v.element);
+    }
   }
+  
+  updateProgress(100, `${extractedVideos.length} vídeos carregados!`);
+  await sleep(500);
+  showProgress(false);
+  
+  isExtracting = false;
+  applyFiltersAndSort();
 }
 
-// Load ALL videos by continuous scrolling
+// Load ALL videos
 async function loadAllVideos() {
   if (isExtracting) return;
   
   isExtracting = true;
+  extractionAborted = false;
   showProgress(true);
-  updateProgress(0, 'Carregando TODOS os vídeos...');
   
-  const btn = panelElement.querySelector('#tap-load-all');
+  const btn = toolbarElement.querySelector('#tat-load-all');
   btn.disabled = true;
   btn.textContent = '⏳ Carregando...';
   
   let previousCount = extractedVideos.length;
   let noNewVideosCount = 0;
   let scrollCount = 0;
-  const maxNoNewVideos = 3; // Stop after 3 scrolls with no new videos
+  const maxNoNewVideos = 4;
   
   while (noNewVideosCount < maxNoNewVideos && !extractionAborted) {
     window.scrollTo(0, document.documentElement.scrollHeight);
@@ -1014,7 +916,10 @@ async function loadAllVideos() {
     
     for (const video of newVideos) {
       if (!existingIds.has(video.id)) {
-        extractedVideos.push({ ...video, selected: false });
+        extractedVideos.push(video);
+        if (video.element) {
+          videoElementsMap.set(video.id, video.element);
+        }
         addedCount++;
       }
     }
@@ -1028,12 +933,12 @@ async function loadAllVideos() {
     }
     
     updateProgress(
-      Math.min(95, 20 + scrollCount * 5),
-      `${extractedVideos.length} vídeos carregados (scroll ${scrollCount})...`
+      Math.min(95, 10 + scrollCount * 3),
+      `${extractedVideos.length} vídeos (scroll ${scrollCount})...`
     );
     
-    // Update UI periodically
-    if (scrollCount % 5 === 0) {
+    // Update DOM periodically
+    if (scrollCount % 3 === 0) {
       applyFiltersAndSort();
     }
   }
@@ -1047,18 +952,233 @@ async function loadAllVideos() {
   
   applyFiltersAndSort();
   
-  // Update cache
-  const username = getUsername();
-  if (username) {
-    chrome.storage.local.set({
-      [`profile_${username}`]: {
-        videos: extractedVideos,
-        timestamp: Date.now()
+  alert(`✅ Carregamento completo!\n${extractedVideos.length} vídeos encontrados.`);
+}
+
+// Select visible videos
+function selectVisibleVideos() {
+  const filtered = window._tatFilteredVideos || [];
+  filtered.forEach(v => {
+    selectedVideoIds.add(v.id);
+    const el = videoElementsMap.get(v.id);
+    if (el) el.classList.add('tat-video-selected');
+  });
+  updateStats();
+}
+
+// Clear selection
+function clearSelection() {
+  selectedVideoIds.clear();
+  document.querySelectorAll('.tat-video-selected').forEach(el => {
+    el.classList.remove('tat-video-selected');
+  });
+  updateStats();
+}
+
+// Download videos as ZIP
+async function downloadVideosAsZip() {
+  const selectedVideos = extractedVideos.filter(v => selectedVideoIds.has(v.id));
+  if (selectedVideos.length === 0) return;
+  
+  // Sort by current filter order
+  const orderedVideos = (window._tatFilteredVideos || []).filter(v => selectedVideoIds.has(v.id));
+  
+  const modal = toolbarElement.querySelector('#tat-modal');
+  const progressFill = toolbarElement.querySelector('#tat-dl-progress');
+  const progressText = toolbarElement.querySelector('#tat-dl-text');
+  const logContainer = toolbarElement.querySelector('#tat-dl-log');
+  
+  modal.classList.add('active');
+  logContainer.innerHTML = '';
+  extractionAborted = false;
+  
+  const addLog = (text, type = '') => {
+    const item = document.createElement('div');
+    item.className = 'tat-modal-log-item ' + type;
+    item.textContent = text;
+    logContainer.appendChild(item);
+    logContainer.scrollTop = logContainer.scrollHeight;
+  };
+  
+  addLog(`Iniciando download de ${orderedVideos.length} vídeos...`);
+  
+  // Create ZIP using JSZip
+  const zip = new JSZip();
+  let successCount = 0;
+  let failCount = 0;
+  
+  for (let i = 0; i < orderedVideos.length; i++) {
+    if (extractionAborted) {
+      addLog('Download cancelado pelo usuário.', 'error');
+      break;
+    }
+    
+    const video = orderedVideos[i];
+    const progress = ((i + 1) / orderedVideos.length) * 100;
+    
+    progressFill.style.width = `${progress}%`;
+    progressText.textContent = `Baixando ${i + 1} de ${orderedVideos.length}...`;
+    
+    try {
+      addLog(`[${i + 1}/${orderedVideos.length}] Baixando ${video.id}...`);
+      
+      // Try multiple download sources
+      const downloadUrls = [
+        `https://tikwm.com/video/media/hdplay/${video.id}.mp4`,
+        `https://www.tikwm.com/video/media/play/${video.id}.mp4`,
+        video.downloadUrl
+      ].filter(Boolean);
+      
+      let blob = null;
+      
+      for (const url of downloadUrls) {
+        if (extractionAborted) break;
+        
+        try {
+          const response = await fetch(url, {
+            mode: 'cors',
+            headers: {
+              'Accept': 'video/mp4,video/*,*/*'
+            }
+          });
+          
+          if (response.ok) {
+            blob = await response.blob();
+            if (blob.size > 10000) { // At least 10KB
+              addLog(`  ✓ Sucesso via ${new URL(url).hostname}`, 'success');
+              break;
+            }
+          }
+        } catch (e) {
+          console.log('Download attempt failed:', url, e);
+        }
       }
-    });
+      
+      if (blob && blob.size > 10000) {
+        const filename = `${String(i + 1).padStart(3, '0')}_${video.id}.mp4`;
+        zip.file(filename, blob);
+        successCount++;
+      } else {
+        addLog(`  ✗ Falhou - tentando proxy...`, 'error');
+        
+        // Try with a CORS proxy as last resort
+        try {
+          const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(`https://tikwm.com/video/media/hdplay/${video.id}.mp4`)}`;
+          const response = await fetch(proxyUrl);
+          if (response.ok) {
+            blob = await response.blob();
+            if (blob.size > 10000) {
+              const filename = `${String(i + 1).padStart(3, '0')}_${video.id}.mp4`;
+              zip.file(filename, blob);
+              successCount++;
+              addLog(`  ✓ Sucesso via proxy`, 'success');
+            } else {
+              failCount++;
+            }
+          } else {
+            failCount++;
+          }
+        } catch (e) {
+          failCount++;
+          addLog(`  ✗ Não foi possível baixar`, 'error');
+        }
+      }
+      
+    } catch (e) {
+      console.error('Download failed for video:', video.id, e);
+      addLog(`  ✗ Erro: ${e.message}`, 'error');
+      failCount++;
+    }
+    
+    // Small delay between downloads
+    await sleep(500);
   }
   
-  alert(`✅ Carregamento completo!\n${extractedVideos.length} vídeos encontrados.`);
+  if (extractionAborted) {
+    modal.classList.remove('active');
+    return;
+  }
+  
+  if (successCount > 0) {
+    progressText.textContent = 'Gerando arquivo ZIP...';
+    addLog(`Compactando ${successCount} vídeos...`);
+    
+    try {
+      const content = await zip.generateAsync({ type: 'blob' }, (metadata) => {
+        progressFill.style.width = `${metadata.percent}%`;
+      });
+      
+      const url = URL.createObjectURL(content);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `tiktok_${getUsername()}_${Date.now()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      addLog(`✅ Download concluído! ${successCount} vídeos no ZIP.`, 'success');
+      progressText.textContent = `✅ ${successCount} vídeos baixados!`;
+    } catch (e) {
+      addLog(`Erro ao gerar ZIP: ${e.message}`, 'error');
+    }
+  } else {
+    progressText.textContent = '❌ Nenhum vídeo baixado';
+    addLog('Nenhum vídeo conseguiu ser baixado.', 'error');
+    addLog('Os links podem estar bloqueados pelo TikTok.', 'error');
+    addLog('Tente exportar o CSV e usar um downloader externo.', 'error');
+  }
+  
+  if (failCount > 0) {
+    addLog(`⚠️ ${failCount} vídeos falharam.`, 'error');
+  }
+}
+
+// Export CSV
+function exportCSV() {
+  const videos = window._tatFilteredVideos || extractedVideos;
+  
+  const headers = ['Posição', 'ID', 'URL TikTok', 'Link Download', 'Descrição', 'Views', 'Likes', 'Comentários', 'Data'];
+  const rows = videos.map((v, idx) => [
+    idx + 1,
+    v.id,
+    v.url,
+    `https://tikwm.com/video/media/hdplay/${v.id}.mp4`,
+    `"${(v.description || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+    v.views,
+    v.likes,
+    v.comments,
+    v.createTime ? new Date(v.createTime).toLocaleDateString('pt-BR') : ''
+  ]);
+  
+  const csv = '\ufeff' + [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');
+  downloadFile(csv, `tiktok_${getUsername()}_${Date.now()}.csv`, 'text/csv;charset=utf-8');
+}
+
+// Download file helper
+function downloadFile(content, filename, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Show/hide progress
+function showProgress(show) {
+  const progress = toolbarElement?.querySelector('#tat-progress');
+  if (progress) progress.classList.toggle('active', show);
+}
+
+// Update progress
+function updateProgress(percent, text) {
+  if (!toolbarElement) return;
+  toolbarElement.querySelector('#tat-progress-fill').style.width = `${percent}%`;
+  toolbarElement.querySelector('#tat-progress-text').textContent = text;
 }
 
 // Auto scroll
@@ -1075,11 +1195,6 @@ async function autoScroll(maxScrolls = 5) {
     
     lastHeight = newHeight;
     scrollCount++;
-    
-    updateProgress(
-      Math.min(90, 50 + scrollCount * 8),
-      `Scroll ${scrollCount}/${maxScrolls}...`
-    );
   }
   
   window.scrollTo(0, 0);
@@ -1090,181 +1205,69 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Render videos list
-function renderVideos() {
-  const container = panelElement.querySelector('#tap-videos');
+// Add floating button
+function addFloatingButton() {
+  if (document.getElementById('tiktok-analyser-fab')) return;
   
-  if (filteredVideos.length === 0) {
-    container.innerHTML = `
-      <div class="tap-empty">
-        <p>${extractedVideos.length === 0 ? 'Nenhum vídeo encontrado' : 'Nenhum resultado para os filtros'}</p>
-      </div>
-    `;
-    return;
-  }
+  const fab = document.createElement('button');
+  fab.id = 'tiktok-analyser-fab';
+  fab.innerHTML = '📊';
+  fab.title = 'Abrir TikTok Analyser Pro';
+  fab.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 56px;
+    height: 56px;
+    border-radius: 28px;
+    background: linear-gradient(135deg, #fe2c55 0%, #25f4ee 100%);
+    border: none;
+    cursor: pointer;
+    z-index: 999998;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    box-shadow: 0 4px 20px rgba(254, 44, 85, 0.4);
+    transition: all 0.3s;
+  `;
   
-  container.innerHTML = filteredVideos.map((video, index) => `
-    <div class="tap-video-item ${video.selected ? 'selected' : ''}" data-id="${video.id}">
-      <div class="tap-video-checkbox">${video.selected ? '✓' : ''}</div>
-      <img class="tap-video-thumb" src="${video.thumbnail}" alt="" loading="lazy" onerror="this.style.display='none'">
-      <div class="tap-video-info">
-        <div class="tap-video-desc">${video.description || 'Sem descrição'}</div>
-        <div class="tap-video-metrics">
-          <span>👀 ${formatNumber(video.views)}</span>
-          <span>❤️ ${formatNumber(video.likes)}</span>
-          <span>💬 ${formatNumber(video.comments)}</span>
-        </div>
-        <div class="tap-video-link">
-          <a href="${video.url}" target="_blank" onclick="event.stopPropagation()">${video.url}</a>
-        </div>
-      </div>
-    </div>
-  `).join('');
-  
-  // Add click handlers for selection
-  container.querySelectorAll('.tap-video-item').forEach(item => {
-    item.addEventListener('click', (e) => {
-      if (e.target.tagName === 'A') return;
-      const id = item.dataset.id;
-      const video = extractedVideos.find(v => v.id === id);
-      if (video) {
-        video.selected = !video.selected;
-        item.classList.toggle('selected');
-        item.querySelector('.tap-video-checkbox').textContent = video.selected ? '✓' : '';
-        updateStats();
-      }
-    });
+  fab.addEventListener('mouseenter', () => {
+    fab.style.transform = 'scale(1.1)';
   });
+  
+  fab.addEventListener('mouseleave', () => {
+    fab.style.transform = 'scale(1)';
+  });
+  
+  fab.addEventListener('click', toggleToolbar);
+  document.body.appendChild(fab);
 }
 
-// Update stats display
-function updateStats() {
-  const selectedVideos = extractedVideos.filter(v => v.selected);
-  const totalViews = filteredVideos.reduce((sum, v) => sum + v.views, 0);
-  
-  panelElement.querySelector('#tap-total-videos').textContent = extractedVideos.length;
-  panelElement.querySelector('#tap-filtered-count').textContent = filteredVideos.length;
-  panelElement.querySelector('#tap-selected-count').textContent = selectedVideos.length;
-  panelElement.querySelector('#tap-total-views').textContent = formatNumber(totalViews);
-  
-  const downloadBtn = panelElement.querySelector('#tap-download-videos');
-  downloadBtn.disabled = selectedVideos.length === 0;
-  downloadBtn.innerHTML = selectedVideos.length > 0 
-    ? `📥 Baixar ${selectedVideos.length} Vídeos` 
-    : '📥 Baixar Vídeos';
-}
-
-// Show/hide progress
-function showProgress(show) {
-  const progress = panelElement.querySelector('#tap-progress');
-  progress.classList.toggle('active', show);
-}
-
-// Update progress
-function updateProgress(percent, text) {
-  panelElement.querySelector('#tap-progress-fill').style.width = `${percent}%`;
-  panelElement.querySelector('#tap-progress-text').textContent = text;
-}
-
-// Download videos
-async function downloadVideos() {
-  const selected = extractedVideos.filter(v => v.selected);
-  if (selected.length === 0) return;
-  
-  // Sort selected by current filter order
-  const orderedSelected = filteredVideos.filter(v => v.selected);
-  const modal = panelElement.querySelector('#tap-download-modal');
-  const progressFill = panelElement.querySelector('#tap-dl-progress');
-  const progressText = panelElement.querySelector('#tap-dl-text');
-  
-  modal.classList.add('active');
-  
-  // Since we can't download directly due to CORS, we'll use TikTok's no-watermark API
-  // For each video, we open the download link
-  for (let i = 0; i < orderedSelected.length; i++) {
-    const video = orderedSelected[i];
-    const progress = ((i + 1) / orderedSelected.length) * 100;
-    
-    progressFill.style.width = `${progress}%`;
-    progressText.textContent = `Baixando ${i + 1} de ${orderedSelected.length}...`;
-    
-    // Try to download the video
-    try {
-      // Use ssstik.io API or tikcdn
-      const downloadUrl = `https://www.tikwm.com/video/media/hdplay/${video.id}.mp4`;
-      
-      // Create download link
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = `tiktok_${video.id}.mp4`;
-      a.target = '_blank';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      
-      // Wait between downloads to avoid overwhelming
-      await sleep(1500);
-    } catch (e) {
-      console.error('Download failed for video:', video.id, e);
-    }
+// Check if on profile page and add FAB
+function checkAndInit() {
+  if (window.location.pathname.match(/\/@[^/]+\/?$/)) {
+    setTimeout(addFloatingButton, 1000);
   }
-  
-  progressText.textContent = `✅ ${orderedSelected.length} vídeos processados!`;
-  
-  setTimeout(() => {
-    modal.classList.remove('active');
-  }, 2000);
 }
 
-// Export CSV with links in filter order
-function exportCSV() {
-  const headers = ['Posição', 'ID', 'URL do Vídeo', 'Link Download', 'Descrição', 'Views', 'Likes', 'Comentários', 'Compartilhamentos', 'Data'];
-  const rows = filteredVideos.map((v, idx) => [
-    idx + 1,
-    v.id,
-    v.url,
-    `https://www.tikwm.com/video/media/hdplay/${v.id}.mp4`,
-    `"${(v.description || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
-    v.views,
-    v.likes,
-    v.comments,
-    v.shares || 0,
-    v.createTime ? new Date(v.createTime).toLocaleDateString('pt-BR') : ''
-  ]);
-  
-  const csv = '\ufeff' + [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');
-  downloadFile(csv, `tiktok_${getUsername()}_${Date.now()}.csv`, 'text/csv;charset=utf-8');
+// Init on load
+checkAndInit();
+
+// Watch for navigation
+let lastUrl = location.href;
+new MutationObserver(() => {
+  if (location.href !== lastUrl) {
+    lastUrl = location.href;
+    checkAndInit();
+  }
+}).observe(document, { subtree: true, childList: true });
+
+// Load JSZip
+if (typeof JSZip === 'undefined') {
+  const script = document.createElement('script');
+  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+  document.head.appendChild(script);
 }
 
-// Export JSON
-function exportJSON() {
-  const json = JSON.stringify({
-    username: getUsername(),
-    timestamp: new Date().toISOString(),
-    sortBy: currentSort.field,
-    sortOrder: currentSort.order,
-    filters: currentFilters,
-    totalVideos: extractedVideos.length,
-    filteredCount: filteredVideos.length,
-    videos: filteredVideos.map((v, idx) => ({
-      position: idx + 1,
-      ...v,
-      downloadUrl: `https://www.tikwm.com/video/media/hdplay/${v.id}.mp4`
-    }))
-  }, null, 2);
-  
-  downloadFile(json, `tiktok_${getUsername()}_${Date.now()}.json`, 'application/json');
-}
-
-// Download file helper
-function downloadFile(content, filename, type) {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
+console.log('[TikTok Analyser] Content script initialized v2');
