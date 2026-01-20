@@ -3,7 +3,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Input } from '@/components/ui/input';
-import { Settings, Crop, Square, Volume2, Sparkles, Scissors, AtSign, Brain } from 'lucide-react';
+import { Settings, Crop, Square, Volume2, Sparkles, Scissors, AtSign, Brain, Subtitles } from 'lucide-react';
 import type { ProcessingSettings as ProcessingSettingsType } from '@/lib/videoProcessor';
 
 interface ProcessingSettingsProps {
@@ -149,6 +149,28 @@ export function ProcessingSettings({ settings, onSettingsChange, disabled }: Pro
               checked={settings.useAiFraming ?? false}
               onCheckedChange={(checked) => 
                 onSettingsChange({ ...settings, useAiFraming: checked })
+              }
+              disabled={disabled}
+            />
+          </div>
+
+          <div className="flex items-center justify-between p-3 rounded-lg border bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border-yellow-500/30">
+            <div className="flex items-center gap-3">
+              <Subtitles className="h-4 w-4 text-yellow-500" />
+              <div>
+                <Label htmlFor="ai-captions" className="font-medium cursor-pointer">
+                  Legenda automática com IA ✨
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Transcreve o áudio e adiciona legendas animadas
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="ai-captions"
+              checked={settings.useCaptions ?? false}
+              onCheckedChange={(checked) => 
+                onSettingsChange({ ...settings, useCaptions: checked })
               }
               disabled={disabled}
             />
