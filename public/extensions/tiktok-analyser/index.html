@@ -5,95 +5,387 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TikTok Analyser Pro - Download</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%);
       color: #fff;
       min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
       padding: 40px 20px;
     }
-    .container { max-width: 700px; text-align: center; }
-    .icon { font-size: 80px; margin-bottom: 24px; }
-    h1 {
-      font-size: 36px;
-      font-weight: 700;
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    
+    .logo {
+      font-size: 64px;
       margin-bottom: 16px;
+    }
+    
+    h1 {
+      font-size: 32px;
+      margin-bottom: 8px;
       background: linear-gradient(135deg, #25f4ee 0%, #fe2c55 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
-    .subtitle { font-size: 18px; color: rgba(255,255,255,0.7); margin-bottom: 40px; line-height: 1.6; }
-    .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 40px; text-align: left; }
-    .feature { background: rgba(255,255,255,0.05); border-radius: 12px; padding: 20px; border: 1px solid rgba(255,255,255,0.1); }
-    .feature-icon { font-size: 28px; margin-bottom: 12px; }
-    .feature h3 { font-size: 16px; margin-bottom: 8px; }
-    .feature p { font-size: 13px; color: rgba(255,255,255,0.6); line-height: 1.5; }
-    .steps { background: rgba(255,255,255,0.05); border-radius: 16px; padding: 32px; margin-bottom: 32px; text-align: left; }
-    .steps h2 { font-size: 20px; margin-bottom: 24px; text-align: center; }
-    .step { display: flex; gap: 16px; margin-bottom: 20px; }
-    .step:last-child { margin-bottom: 0; }
-    .step-number { width: 32px; height: 32px; background: linear-gradient(135deg, #fe2c55 0%, #25f4ee 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
-    .step-content h4 { font-size: 15px; margin-bottom: 4px; }
-    .step-content p { font-size: 13px; color: rgba(255,255,255,0.6); line-height: 1.5; }
-    .step-content code { background: rgba(0,0,0,0.3); padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 12px; }
-    .download-btn { display: inline-flex; align-items: center; gap: 12px; padding: 18px 40px; background: linear-gradient(135deg, #fe2c55 0%, #ff6b6b 100%); color: #fff; border: none; border-radius: 12px; font-size: 18px; font-weight: 600; cursor: pointer; transition: all 0.3s; margin-bottom: 16px; }
-    .download-btn:hover { transform: translateY(-3px); box-shadow: 0 10px 30px rgba(254, 44, 85, 0.4); }
-    .note { font-size: 13px; color: rgba(255,255,255,0.4); max-width: 500px; margin: 0 auto; line-height: 1.6; }
+    
+    .subtitle {
+      color: rgba(255,255,255,0.6);
+      font-size: 16px;
+    }
+    
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 40px;
+    }
+    
+    .feature {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    
+    .feature-icon {
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+    
+    .feature-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .feature-desc {
+      font-size: 12px;
+      color: rgba(255,255,255,0.5);
+    }
+    
+    .download-section {
+      background: linear-gradient(135deg, rgba(37, 244, 238, 0.1) 0%, rgba(254, 44, 85, 0.1) 100%);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 16px;
+      padding: 32px;
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    
+    .download-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 32px;
+      background: linear-gradient(135deg, #fe2c55 0%, #ff6b6b 100%);
+      border: none;
+      border-radius: 12px;
+      color: #fff;
+      font-size: 18px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+      margin-bottom: 16px;
+    }
+    
+    .download-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px rgba(254, 44, 85, 0.4);
+    }
+    
+    .download-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    .status {
+      font-size: 14px;
+      color: rgba(255,255,255,0.6);
+      min-height: 20px;
+    }
+    
+    .status.error {
+      color: #f87171;
+    }
+    
+    .status.success {
+      color: #4ade80;
+    }
+    
+    .instructions {
+      background: rgba(255,255,255,0.03);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    
+    .instructions h2 {
+      font-size: 18px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .steps {
+      list-style: none;
+    }
+    
+    .step {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    
+    .step:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+    
+    .step-num {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, #25f4ee 0%, #fe2c55 100%);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    
+    .step-content h3 {
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    
+    .step-content p {
+      font-size: 13px;
+      color: rgba(255,255,255,0.6);
+    }
+    
+    .step-content code {
+      background: rgba(0,0,0,0.3);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="icon">📊</div>
-    <h1>TikTok Analyser Pro</h1>
-    <p class="subtitle">Extensão avançada com filtros, ordenação e download de vídeos</p>
+    <div class="header">
+      <div class="logo">📊</div>
+      <h1>TikTok Analyser Pro</h1>
+      <p class="subtitle">Extensão Chrome para análise avançada de perfis TikTok</p>
+    </div>
     
     <div class="features">
-      <div class="feature"><div class="feature-icon">🎚️</div><h3>Filtros Avançados</h3><p>Filtre por Views, Likes e Comentários com min/max</p></div>
-      <div class="feature"><div class="feature-icon">🔄</div><h3>Ordenação</h3><p>Ordene maior→menor ou menor→maior</p></div>
-      <div class="feature"><div class="feature-icon">📥</div><h3>Carregar Todos</h3><p>Auto-scroll para carregar todos os vídeos</p></div>
-      <div class="feature"><div class="feature-icon">📋</div><h3>CSV com Links</h3><p>Exportar com links de download direto</p></div>
+      <div class="feature">
+        <div class="feature-icon">🔍</div>
+        <div class="feature-title">Filtros na Página</div>
+        <div class="feature-desc">Filtre e reordene os vídeos diretamente na tela do TikTok</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📊</div>
+        <div class="feature-title">Ordenação</div>
+        <div class="feature-desc">Ordene por Views, Likes, Comentários ou Data</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📥</div>
+        <div class="feature-title">Download ZIP</div>
+        <div class="feature-desc">Baixe múltiplos vídeos em um único arquivo ZIP</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📋</div>
+        <div class="feature-title">Export CSV</div>
+        <div class="feature-desc">Exporte links de download em CSV para uso externo</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🔄</div>
+        <div class="feature-title">Carregar Todos</div>
+        <div class="feature-desc">Carrega automaticamente todos os vídeos do perfil</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">☑️</div>
+        <div class="feature-title">Seleção</div>
+        <div class="feature-desc">Selecione vídeos clicando diretamente neles</div>
+      </div>
     </div>
     
-    <div class="steps">
-      <h2>📥 Como Instalar</h2>
-      <div class="step"><div class="step-number">1</div><div class="step-content"><h4>Baixe e extraia o ZIP</h4></div></div>
-      <div class="step"><div class="step-number">2</div><div class="step-content"><h4>Acesse <code>chrome://extensions</code></h4></div></div>
-      <div class="step"><div class="step-number">3</div><div class="step-content"><h4>Ative "Modo desenvolvedor"</h4></div></div>
-      <div class="step"><div class="step-number">4</div><div class="step-content"><h4>Clique "Carregar sem compactação"</h4></div></div>
-      <div class="step"><div class="step-number">5</div><div class="step-content"><h4>Selecione a pasta extraída</h4></div></div>
+    <div class="download-section">
+      <button class="download-btn" id="download-btn" onclick="downloadExtension()">
+        📦 Baixar Extensão (ZIP)
+      </button>
+      <div class="status" id="status"></div>
     </div>
     
-    <button class="download-btn" id="download-zip" type="button"><span>⬇️</span><span>Baixar Extensão (ZIP)</span></button>
-    <p class="note">Funciona no Chrome. Acesse um perfil TikTok (@usuario) e clique no ícone da extensão.</p>
+    <div class="instructions">
+      <h2>📖 Como Instalar</h2>
+      <ol class="steps">
+        <li class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <h3>Baixe a extensão</h3>
+            <p>Clique no botão acima para baixar o arquivo ZIP</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <h3>Extraia o ZIP</h3>
+            <p>Descompacte o arquivo em uma pasta do seu computador</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <h3>Abra as Extensões do Chrome</h3>
+            <p>Acesse <code>chrome://extensions</code> no navegador</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <h3>Ative o Modo Desenvolvedor</h3>
+            <p>No canto superior direito, ative "Modo do desenvolvedor"</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-num">5</div>
+          <div class="step-content">
+            <h3>Carregue a extensão</h3>
+            <p>Clique em "Carregar sem compactação" e selecione a pasta extraída</p>
+          </div>
+        </li>
+        <li class="step">
+          <div class="step-num">6</div>
+          <div class="step-content">
+            <h3>Use no TikTok</h3>
+            <p>Acesse um perfil TikTok e clique no botão 📊 que aparece no canto</p>
+          </div>
+        </li>
+      </ol>
+    </div>
   </div>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  
+  <script src="vendor/jszip.min.js"></script>
   <script>
-    const btn = document.getElementById('download-zip');
-    const base = '/extensions/tiktok-analyser/';
-    const files = ['manifest.json','background.js','content.js','content-styles.css','popup.html','popup.js','dashboard.html','dashboard.js','dashboard.css'];
-    const icons = ['icons/icon16.png','icons/icon48.png','icons/icon128.png'];
-
-    btn.addEventListener('click', async () => {
+    const EXTENSION_FILES = [
+      'manifest.json',
+      'popup.html',
+      'popup.js',
+      'content.js',
+      'content-styles.css',
+      'background.js',
+      'dashboard.html',
+      'dashboard.js',
+      'dashboard.css',
+      'icons/icon16.png',
+      'icons/icon48.png',
+      'icons/icon128.png'
+    ];
+    
+    function setStatus(text, type = '') {
+      const el = document.getElementById('status');
+      el.textContent = text;
+      el.className = 'status ' + type;
+    }
+    
+    async function downloadExtension() {
+      const btn = document.getElementById('download-btn');
       btn.disabled = true;
-      btn.querySelector('span:last-child').textContent = 'Gerando...';
+      setStatus('Gerando extensão...');
+      
       try {
         const zip = new JSZip();
-        for (const f of files) { zip.file(f, await (await fetch(base + f)).text()); }
-        for (const f of icons) { zip.file(f, await (await fetch(base + f)).arrayBuffer()); }
-        const blob = await zip.generateAsync({type:'blob'});
+        const basePath = window.location.pathname.replace('index.html', '').replace(/\/$/, '');
+        
+        let loadedCount = 0;
+        let errors = [];
+        
+        for (const file of EXTENSION_FILES) {
+          try {
+            const url = `${basePath}/${file}`;
+            const response = await fetch(url, { cache: 'no-store' });
+            
+            if (!response.ok) {
+              console.warn(`File not found: ${file}`);
+              errors.push(file);
+              continue;
+            }
+            
+            const content = await response.blob();
+            
+            if (content.size === 0) {
+              console.warn(`Empty file: ${file}`);
+              errors.push(file);
+              continue;
+            }
+            
+            zip.file(file, content);
+            loadedCount++;
+            setStatus(`Carregando ${loadedCount}/${EXTENSION_FILES.length} arquivos...`);
+            
+          } catch (e) {
+            console.error(`Error loading ${file}:`, e);
+            errors.push(file);
+          }
+        }
+        
+        if (loadedCount < 5) {
+          throw new Error(`Poucos arquivos carregados (${loadedCount}). Verifique sua conexão.`);
+        }
+        
+        setStatus('Compactando...');
+        
+        const blob = await zip.generateAsync({ type: 'blob' });
+        
+        if (blob.size < 1000) {
+          throw new Error('ZIP gerado está muito pequeno. Tente novamente.');
+        }
+        
+        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
+        a.href = url;
         a.download = 'tiktok-analyser-pro.zip';
+        document.body.appendChild(a);
         a.click();
-      } catch(e) { alert('Erro: ' + e.message); }
-      btn.disabled = false;
-      btn.querySelector('span:last-child').textContent = 'Baixar Extensão (ZIP)';
-    });
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        if (errors.length > 0) {
+          setStatus(`✅ Download iniciado! (${errors.length} arquivos não encontrados)`, 'success');
+        } else {
+          setStatus('✅ Download iniciado! Extraia e instale no Chrome.', 'success');
+        }
+        
+      } catch (e) {
+        console.error('Download error:', e);
+        setStatus('❌ Erro: ' + e.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
   </script>
 </body>
 </html>
