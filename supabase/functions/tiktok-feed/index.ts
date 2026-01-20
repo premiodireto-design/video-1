@@ -208,56 +208,63 @@ async function tryMobileApi(username: string, cookie: string): Promise<{ videos:
     
     console.log(`Parsed ${videos.length} videos from page`);
     
-    // If we have secUid, try to get more via API
-    if (secUid && videos.length > 0) {
-      console.log("Attempting to fetch more via API...");
-      
+    // If we have secUid, try to get more via API (even if the initial HTML had 0 items)
+    if (secUid) {
+      console.log("Attempting to fetch via API...");
+
       // Try the post list API with proper parameters
       let cursor = 0;
       let hasMore = true;
       let attempts = 0;
       const maxAttempts = 10;
-      
+
       while (hasMore && attempts < maxAttempts && videos.length < 500) {
         attempts++;
-        await new Promise(r => setTimeout(r, 1000)); // Rate limit
-        
-        const apiUrl = `https://www.tiktok.com/api/post/item_list/?WebIdLastTime=${Math.floor(Date.now() / 1000)}&aid=1988&app_language=pt&app_name=tiktok_web&browser_language=pt-BR&browser_name=Mozilla&browser_online=true&browser_platform=Win32&browser_version=5.0&channel=tiktok_web&cookie_enabled=true&count=35&coverFormat=2&cursor=${cursor}&device_id=${Date.now()}&device_platform=web_pc&focus_state=true&from_page=user&history_len=2&is_fullscreen=false&is_page_visible=true&language=pt&os=windows&priority_region=&referer=&region=BR&screen_height=1080&screen_width=1920&secUid=${encodeURIComponent(secUid)}&tz_name=America/Sao_Paulo&webcast_language=pt`;
-        
+        await new Promise((r) => setTimeout(r, 900)); // basic rate limit
+
+        const apiUrl = `https://www.tiktok.com/api/post/item_list/?WebIdLastTime=${Math.floor(
+          Date.now() / 1000
+        )}&aid=1988&app_language=pt&app_name=tiktok_web&browser_language=pt-BR&browser_name=Mozilla&browser_online=true&browser_platform=Win32&browser_version=5.0&channel=tiktok_web&cookie_enabled=true&count=35&coverFormat=2&cursor=${cursor}&device_id=${Date.now()}&device_platform=web_pc&focus_state=true&from_page=user&history_len=2&is_fullscreen=false&is_page_visible=true&language=pt&os=windows&priority_region=&referer=&region=BR&screen_height=1080&screen_width=1920&secUid=${encodeURIComponent(
+          secUid
+        )}&tz_name=America/Sao_Paulo&webcast_language=pt`;
+
         try {
           const apiResponse = await fetch(apiUrl, {
             headers: {
               ...getWebHeaders(cookie),
-              "Accept": "application/json, text/plain, */*",
-              "Referer": `https://www.tiktok.com/@${username}`,
+              Accept: "application/json, text/plain, */*",
+              Referer: `https://www.tiktok.com/@${username}`,
             },
           });
-          
-          if (apiResponse.ok) {
-            const apiText = await apiResponse.text();
-            if (apiText.length > 50) {
-              const apiData = JSON.parse(apiText);
-              const newItems = apiData?.itemList || [];
-              
-              console.log(`API page ${attempts}: ${newItems.length} items`);
-              
-              for (const item of newItems) {
-                const video = parseVideoItem(item, username);
-                if (video && !videos.find(v => v.id === video.id)) {
-                  videos.push(video);
-                }
-              }
-              
-              hasMore = apiData?.hasMore || false;
-              cursor = apiData?.cursor || 0;
-            } else {
-              console.log("Empty API response");
-              break;
-            }
-          } else {
+
+          if (!apiResponse.ok) {
             console.log(`API response failed: ${apiResponse.status}`);
             break;
           }
+
+          const apiText = await apiResponse.text();
+          if (apiText.length <= 50) {
+            console.log("Empty API response");
+            break;
+          }
+
+          const apiData = JSON.parse(apiText);
+          const newItems = apiData?.itemList || [];
+
+          console.log(`API page ${attempts}: ${newItems.length} items`);
+
+          for (const item of newItems) {
+            const video = parseVideoItem(item, username);
+            if (video && !videos.find((v) => v.id === video.id)) {
+              videos.push(video);
+            }
+          }
+
+          hasMore = Boolean(apiData?.hasMore);
+          cursor = Number(apiData?.cursor || 0);
+
+          // If API returns no items, stop early to avoid burning attempts
+          if (newItems.length === 0) break;
         } catch (e) {
           console.log("API fetch error:", e);
           break;
