@@ -9,6 +9,33 @@ import { captureVideoFrame, analyzeVideoFrame, getDefaultAnalysis, type FrameAna
 import type { GreenArea } from '@/lib/greenDetection';
 import type { VideoFile } from '@/components/video/VideoUpload';
 
+/**
+ * Returns status message based on analysis results
+ * Priority: Bordas (borders) first, then Rosto (face)
+ */
+function getAnalysisStatus(analysis: FrameAnalysis): string {
+  const hasBorders = analysis.contentBounds && 
+    (analysis.contentBounds.width < 0.99 || 
+     analysis.contentBounds.height < 0.99 || 
+     analysis.contentBounds.x > 0.01 || 
+     analysis.contentBounds.y > 0.01);
+
+  // Show borders detection first (priority)
+  if (hasBorders) {
+    if (analysis.hasFace) {
+      return 'Bordas e rosto detectados!';
+    }
+    return 'Bordas detectadas!';
+  }
+
+  // Then show face detection
+  if (analysis.hasFace) {
+    return 'Rosto detectado!';
+  }
+
+  return 'Análise concluída';
+}
+
 interface FramingPreviewProps {
   video: VideoFile | null;
   greenArea: GreenArea | null;
@@ -320,11 +347,8 @@ export function FramingPreview({
               <Brain className="h-4 w-4 text-purple-500" />
               <span className="text-sm font-medium">
                 {isAnalyzing ? 'Analisando com IA...' : 
-                 analysis?.contentBounds && (analysis.contentBounds.width < 0.99 || analysis.contentBounds.height < 0.99) 
-                   ? 'Bordas detectadas!' 
-                   : analysis?.hasFace 
-                     ? 'Rosto detectado!' 
-                     : 'Análise concluída'}
+                 !analysis ? 'Aguardando análise...' :
+                 getAnalysisStatus(analysis)}
               </span>
             </div>
             <Button
