@@ -1273,10 +1273,13 @@ async function downloadVideosAsZip() {
   const selectedVideos = extractedVideos.filter(v => selectedVideoIds.has(v.id));
   if (selectedVideos.length === 0) return;
 
-  // JSZip is loaded as a content script (manifest) to avoid TikTok CSP issues
+  // Load JSZip dynamically if not available
   if (typeof JSZip === 'undefined') {
-    alert('❌ ZIP indisponível (JSZip não carregou). Reinstale a extensão e recarregue a página do TikTok.');
-    return;
+    const loaded = await loadJSZip();
+    if (!loaded) {
+      alert('❌ Não foi possível carregar JSZip. Tente novamente.');
+      return;
+    }
   }
 
   // Sort by current filter order
@@ -1576,25 +1579,38 @@ new MutationObserver(() => {
   }
 }).observe(document, { subtree: true, childList: true });
 
-// Load JSZip (local, to avoid TikTok CSP blocking CDNs)
+// Load JSZip dynamically via fetch + eval (works in extension context)
 async function loadJSZip() {
   if (typeof JSZip !== 'undefined') return true;
 
-  return await new Promise((resolve) => {
-    const existing = document.querySelector('script[data-tat-jszip]');
-    if (existing) {
-      existing.addEventListener('load', () => resolve(true));
-      existing.addEventListener('error', () => resolve(false));
-      return;
-    }
+  const cdnUrls = [
+    'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+    'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+    'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'
+  ];
 
-    const script = document.createElement('script');
-    script.setAttribute('data-tat-jszip', 'true');
-    script.src = chrome.runtime.getURL('vendor/jszip.min.js');
-    script.onload = () => resolve(true);
-    script.onerror = () => resolve(false);
-    document.head.appendChild(script);
-  });
+  for (const url of cdnUrls) {
+    try {
+      console.log('[TikTok Analyser] Loading JSZip from:', url);
+      const response = await fetch(url, { cache: 'force-cache' });
+      if (!response.ok) continue;
+      
+      const code = await response.text();
+      // Use Function constructor to eval in global scope
+      const fn = new Function(code);
+      fn();
+      
+      if (typeof JSZip !== 'undefined') {
+        console.log('[TikTok Analyser] JSZip loaded successfully');
+        return true;
+      }
+    } catch (e) {
+      console.warn('[TikTok Analyser] Failed to load JSZip from:', url, e);
+    }
+  }
+
+  console.error('[TikTok Analyser] Failed to load JSZip from all CDNs');
+  return false;
 }
 
-console.log('[TikTok Analyser] Content script initialized v2');
+console.log('[TikTok Analyser] Content script initialized v2.1');
