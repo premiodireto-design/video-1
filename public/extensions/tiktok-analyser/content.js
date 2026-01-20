@@ -601,6 +601,20 @@ function createToolbarHTML() {
         color: rgba(255,255,255,0.65);
       }
 
+      .tat-side-footer {
+        padding: 12px;
+        border-top: 1px solid rgba(255,255,255,0.08);
+        background: rgba(0,0,0,0.22);
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .tat-side-footer .tat-btn {
+        width: 100%;
+        justify-content: center;
+      }
+
       /* Make room for sidebar */
       body.tat-toolbar-active {
         margin-top: 100px !important;
@@ -697,6 +711,10 @@ function createToolbarHTML() {
         <div class="tat-side-hint">Marque os itens aqui e baixe em ZIP (sem abrir abas).</div>
       </div>
       <div class="tat-side-list" id="tat-sidebar-list"></div>
+      <div class="tat-side-footer">
+        <button class="tat-btn tat-btn-primary" id="tat-side-download-zip" disabled>📥 Baixar ZIP</button>
+        <button class="tat-btn" id="tat-side-export-csv">📋 CSV</button>
+      </div>
     </div>
 
     <!-- Download Modal -->
@@ -819,9 +837,11 @@ function setupToolbarEvents() {
   
   // Download ZIP
   toolbar.querySelector('#tat-download-zip').addEventListener('click', downloadVideosAsZip);
+  toolbar.querySelector('#tat-side-download-zip')?.addEventListener('click', downloadVideosAsZip);
   
   // Export CSV
   toolbar.querySelector('#tat-export-csv').addEventListener('click', exportCSV);
+  toolbar.querySelector('#tat-side-export-csv')?.addEventListener('click', exportCSV);
   
   // Modal cancel
   toolbar.querySelector('#tat-dl-cancel').addEventListener('click', () => {
@@ -867,13 +887,29 @@ function applyFiltersAndSort() {
     ensureStatsForVideos(extractedVideos);
   }
 
-  const valueOrZero = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : 0);
+  const valueForFilter = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : 0);
+
+  const valueForSort = (v) => {
+    switch (currentSort.field) {
+      case 'views':
+        return valueForFilter(v.views);
+      case 'likes':
+        // likes can be unknown (null) until we fetch; keep them at the end instead of "0" misleading ordering
+        return typeof v.likes === 'number' && Number.isFinite(v.likes) ? v.likes : -1;
+      case 'comments':
+        return typeof v.comments === 'number' && Number.isFinite(v.comments) ? v.comments : -1;
+      case 'date':
+        return v.createTime ? new Date(v.createTime).getTime() : 0;
+      default:
+        return 0;
+    }
+  };
 
   // Filter videos
   const filtered = extractedVideos.filter((v) => {
-    const views = valueOrZero(v.views);
-    const likes = valueOrZero(v.likes);
-    const comments = valueOrZero(v.comments);
+    const views = valueForFilter(v.views);
+    const likes = valueForFilter(v.likes);
+    const comments = valueForFilter(v.comments);
 
     if (views < currentFilters.minViews) return false;
     if (views > currentFilters.maxViews) return false;
@@ -886,28 +922,8 @@ function applyFiltersAndSort() {
 
   // Sort
   filtered.sort((a, b) => {
-    let valA, valB;
-    switch (currentSort.field) {
-      case 'views':
-        valA = valueOrZero(a.views);
-        valB = valueOrZero(b.views);
-        break;
-      case 'likes':
-        valA = valueOrZero(a.likes);
-        valB = valueOrZero(b.likes);
-        break;
-      case 'comments':
-        valA = valueOrZero(a.comments);
-        valB = valueOrZero(b.comments);
-        break;
-      case 'date':
-        valA = a.createTime ? new Date(a.createTime).getTime() : 0;
-        valB = b.createTime ? new Date(b.createTime).getTime() : 0;
-        break;
-      default:
-        valA = 0;
-        valB = 0;
-    }
+    const valA = valueForSort(a);
+    const valB = valueForSort(b);
     return currentSort.order === 'desc' ? valB - valA : valA - valB;
   });
 
@@ -952,10 +968,10 @@ function applyFiltersAndSort() {
     }
   });
 
-  updateStats();
-
   // Store filtered for export / download ordering
   window._tatFilteredVideos = filtered;
+
+  updateStats();
 
   // Render sidebar in the correct order (this is the "truth" of ordering)
   renderSidebarList(filtered);
@@ -989,8 +1005,10 @@ function renderSidebarList(videosInOrder) {
     .slice(0, 5000) // safety
     .map((v, idx) => {
       const views = typeof v.views === 'number' ? v.views : 0;
-      const likes = typeof v.likes === 'number' ? v.likes : 0;
-      const comments = typeof v.comments === 'number' ? v.comments : 0;
+      const likesRaw = v.likes;
+      const commentsRaw = v.comments;
+      const likes = typeof likesRaw === 'number' ? formatNumber(likesRaw) : '…';
+      const comments = typeof commentsRaw === 'number' ? formatNumber(commentsRaw) : '…';
       const isChecked = selectedVideoIds.has(v.id);
 
       return `
@@ -1000,7 +1018,7 @@ function renderSidebarList(videosInOrder) {
           </label>
           <div class="tat-side-meta">
             <div class="tat-side-title">#${idx + 1} • ${v.id}</div>
-            <div class="tat-side-stats">👀 ${formatNumber(views)}  ❤️ ${formatNumber(likes)}  💬 ${formatNumber(comments)}</div>
+            <div class="tat-side-stats">👀 ${formatNumber(views)}  ❤️ ${likes}  💬 ${comments}</div>
           </div>
           <button class="tat-side-jump" data-id="${v.id}">Ir</button>
         </div>
@@ -1118,9 +1136,8 @@ async function ensureStatsForVideos(videos) {
         v.comments = stats.comments;
         v.shares = stats.shares;
       } else {
-        // keep as 0 for display (but remember it might be blocked)
-        if (v.likes == null) v.likes = 0;
-        if (v.comments == null) v.comments = 0;
+        // Keep likes/comments as "unknown" (null) when blocked; this avoids fake "0" ordering.
+        // We'll retry later when the user applies again.
       }
       await sleep(80);
     }
@@ -1141,10 +1158,20 @@ function updateStats() {
   toolbarElement.querySelector('#tat-selected').textContent = selectedVideoIds.size;
   
   const downloadBtn = toolbarElement.querySelector('#tat-download-zip');
-  downloadBtn.disabled = selectedVideoIds.size === 0;
-  downloadBtn.textContent = selectedVideoIds.size > 0 
-    ? `📥 Baixar ${selectedVideoIds.size} ZIP` 
-    : '📥 Baixar ZIP';
+  const sideDownloadBtn = toolbarElement.querySelector('#tat-side-download-zip');
+
+  const disabled = selectedVideoIds.size === 0;
+  const label = selectedVideoIds.size > 0 ? `📥 Baixar ${selectedVideoIds.size} ZIP` : '📥 Baixar ZIP';
+
+  if (downloadBtn) {
+    downloadBtn.disabled = disabled;
+    downloadBtn.textContent = label;
+  }
+
+  if (sideDownloadBtn) {
+    sideDownloadBtn.disabled = disabled;
+    sideDownloadBtn.textContent = label;
+  }
 }
 
 // Start extraction
