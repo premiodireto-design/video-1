@@ -105,19 +105,19 @@ export async function processVideo(
   });
 
   // Create canvas for composition
-  // ALWAYS render at full 1080x1920 for best quality and smooth playback
-  const makeEven = (n: number) => n % 2 === 0 ? n : n - 1;
+  // Performance: when maxQuality=false, render at 720x1280 (faster) and upscale later during MP4 conversion.
+  // This significantly reduces stutter and keeps A/V sync more stable on mid/low-end machines.
+  const renderScale = settings.maxQuality ? 1 : (2 / 3); // 1080->720
+
+  const makeEven = (n: number) => (n % 2 === 0 ? n : n - 1);
 
   const canvas = document.createElement('canvas');
-  canvas.width = 1080;
-  canvas.height = 1920;
+  canvas.width = makeEven(Math.round(1080 * renderScale));
+  canvas.height = makeEven(Math.round(1920 * renderScale));
 
   const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false })!;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  
-  // Remove renderScale - always use full resolution
-  const renderScale = 1;
 
   // Calculate video scaling
   const { x, y, width: ww, height: wh } = greenArea;
@@ -214,8 +214,8 @@ export async function processVideo(
   });
 
   // Set up MediaRecorder (video from canvas + audio from the source video)
-  // Use variable frame-rate capture when possible to reduce A/V drift under load.
-  const canvasStream = canvas.captureStream();
+  // Use a fixed FPS stream to reduce stutter and keep audio in sync.
+  const canvasStream = canvas.captureStream(30);
 
   // We start with the canvas video track, then (after playback starts) we attach an audio track.
   const combinedStream = new MediaStream(canvasStream.getVideoTracks());
@@ -283,11 +283,11 @@ export async function processVideo(
     return false;
   };
 
-  // Use higher bitrate for smoother video output
+  // Conservative bitrates reduce encode stalls (which cause stutter) and help A/V sync.
   const recorder = new MediaRecorder(combinedStream, {
     mimeType,
-    videoBitsPerSecond: settings.maxQuality ? 16000000 : 10000000,
-    audioBitsPerSecond: 256000,
+    videoBitsPerSecond: settings.maxQuality ? 12000000 : 8000000,
+    audioBitsPerSecond: 192000,
   });
 
   const chunks: Blob[] = [];
