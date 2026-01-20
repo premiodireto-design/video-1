@@ -220,15 +220,12 @@ export async function processVideo(
   // We start with the canvas video track, then (after playback starts) we attach an audio track.
   const combinedStream = new MediaStream(canvasStream.getVideoTracks());
 
-  // Prefer MP4 when supported (fast downloads, no FFmpeg step). Fallback to WebM.
-  // Note: MP4 recording support varies by browser.
+  // IMPORTANT (stability): Always record as WebM and convert to MP4.
+  // Direct MP4 recording is inconsistent across browsers and can produce files
+  // that *play with frozen frames while audio continues*.
   const preferredTypes = [
-    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-    'video/mp4;codecs=avc1,mp4a.40.2',
-    'video/mp4',
-    'video/webm;codecs=vp9,opus',
     'video/webm;codecs=vp8,opus',
-    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp9,opus',
     'video/webm',
   ];
 
