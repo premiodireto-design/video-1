@@ -82,7 +82,6 @@ export async function convertWebMToMP4(
     onProgress?: (progress: number) => void;
     signal?: AbortSignal;
     timeoutMs?: number;
-    targetFps?: number;
   }
 ): Promise<Blob> {
   const ff = await loadFFmpegConverter();
@@ -129,19 +128,14 @@ export async function convertWebMToMP4(
     }
 
     console.log('[FFmpeg Converter] Starting conversion...');
-    // Convert to MP4 (H.264 + AAC)
-    // Keep CFR at the chosen FPS to avoid cadence issues.
-    const targetFps = String(Math.max(24, Math.min(60, Math.round(options?.targetFps ?? 30))));
+    // Convert to MP4 (H.264 + AAC) - ULTRAFAST mode
     const execResult = await ff.exec([
       '-i', inputName,
-      '-r', targetFps,
-      '-vsync', 'cfr',
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
       '-crf', '23',
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
-      '-af', 'aresample=async=1:first_pts=0',
       '-b:a', '128k',
       '-movflags', '+faststart',
       '-y',

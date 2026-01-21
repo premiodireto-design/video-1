@@ -7,7 +7,7 @@ const corsHeaders = {
 
 interface TikTokMedia {
   id: string;
-  platform: "tiktok";
+  platform: 'tiktok';
   thumbnail: string;
   caption: string;
   publishedAt: string;
@@ -21,331 +21,346 @@ interface TikTokMedia {
   downloadable: boolean;
 }
 
+// Helper to extract username from URL or handle
 function extractUsername(input: string): string {
   input = input.trim();
-  if (input.startsWith("@")) input = input.substring(1);
-
-  const urlPatterns = [/tiktok\.com\/@([^\/\?]+)/i, /tiktok\.com\/([^\/\?@]+)/i];
+  
+  if (input.startsWith('@')) {
+    input = input.substring(1);
+  }
+  
+  const urlPatterns = [
+    /tiktok\.com\/@([^\/\?]+)/i,
+    /tiktok\.com\/([^\/\?@]+)/i,
+  ];
+  
   for (const pattern of urlPatterns) {
     const match = input.match(pattern);
-    if (match) return match[1];
+    if (match) {
+      return match[1];
+    }
   }
-
-  return input.split("/")[0].split("?")[0];
+  
+  return input.split('/')[0].split('?')[0];
 }
 
-// Mobile app headers - more reliable than web
-function getMobileHeaders(cookie: string): Record<string, string> {
-  return {
-    "User-Agent": "com.ss.android.ugc.trill/2613 (Linux; U; Android 10; en_US; Pixel 4; Build/QQ3A.200805.001; Cronet/58.0.2991.0)",
-    "Accept": "application/json",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
-    "Cookie": cookie,
-  };
-}
-
-// Web headers with full browser simulation
-function getWebHeaders(cookie: string): Record<string, string> {
-  return {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Cache-Control": "max-age=0",
-    "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-    "Cookie": cookie,
-  };
-}
-
-function parseVideoItem(item: any, authorUsername: string): TikTokMedia | null {
+// Parse TikTok post data
+function parsePostData(item: any): TikTokMedia | null {
   try {
-    const id = item?.id || item?.aweme_id || item?.video?.id;
-    if (!id) return null;
-
-    const desc = item?.desc ?? "";
-    const createTime = item?.createTime ?? item?.create_time;
-    const timestampMs = createTime ? Number(createTime) * 1000 : Date.now();
-
-    const stats = item?.stats ?? item?.statistics ?? item?.statsV2 ?? {};
-
-    const likes = Number(stats?.diggCount ?? stats?.digg_count ?? 0);
-    const comments = Number(stats?.commentCount ?? stats?.comment_count ?? 0);
-    const shares = Number(stats?.shareCount ?? stats?.share_count ?? 0);
-    const views = Number(stats?.playCount ?? stats?.play_count ?? 0);
-    const saves = Number(stats?.collectCount ?? stats?.collect_count ?? 0);
-
-    const thumbnail =
-      item?.video?.cover ??
-      item?.video?.dynamicCover ??
-      item?.video?.originCover ??
-      item?.video?.cover?.url_list?.[0] ??
-      "";
-
-    const permalink = `https://www.tiktok.com/@${authorUsername}/video/${id}`;
-    const videoUrl = item?.video?.downloadAddr ?? item?.video?.playAddr ?? "";
-
+    const id = item.id || item.aweme_id || String(Date.now());
+    
+    // Get thumbnail
+    let thumbnail = '';
+    if (item.video?.cover?.url_list?.[0]) thumbnail = item.video.cover.url_list[0];
+    else if (item.video?.dynamic_cover?.url_list?.[0]) thumbnail = item.video.dynamic_cover.url_list[0];
+    else if (item.video?.origin_cover?.url_list?.[0]) thumbnail = item.video.origin_cover.url_list[0];
+    
+    // Get caption/description
+    const caption = item.desc || item.description || '';
+    
+    // Get timestamp
+    let timestamp = Date.now();
+    if (item.create_time) timestamp = item.create_time * 1000;
+    else if (item.createTime) timestamp = item.createTime * 1000;
+    
+    // Get metrics
+    const stats = item.statistics || item.stats || {};
+    const likes = stats.digg_count || stats.diggCount || item.digg_count || 0;
+    const comments = stats.comment_count || stats.commentCount || item.comment_count || 0;
+    const shares = stats.share_count || stats.shareCount || item.share_count || 0;
+    const views = stats.play_count || stats.playCount || item.play_count || 0;
+    const saves = stats.collect_count || stats.collectCount || item.collect_count || 0;
+    
+    // Get video URL - TikTok has multiple formats
+    let videoUrl = '';
+    if (item.video?.play_addr?.url_list?.[0]) {
+      videoUrl = item.video.play_addr.url_list[0];
+    } else if (item.video?.download_addr?.url_list?.[0]) {
+      videoUrl = item.video.download_addr.url_list[0];
+    }
+    
+    // Get author for permalink
+    const authorId = item.author?.unique_id || item.author?.uniqueId || '';
+    
     return {
       id: String(id),
-      platform: "tiktok",
+      platform: 'tiktok',
       thumbnail,
-      caption: String(desc),
-      publishedAt: new Date(timestampMs).toISOString(),
+      caption,
+      publishedAt: new Date(timestamp).toISOString(),
       views,
       likes,
       comments,
       shares,
       saves,
-      permalink,
+      permalink: `https://www.tiktok.com/@${authorId}/video/${id}`,
       videoUrl,
-      downloadable: true,
+      downloadable: !!videoUrl,
     };
   } catch (err) {
-    console.error("Error parsing TikTok item:", err);
+    console.error('Error parsing TikTok post:', err);
     return null;
   }
 }
 
-// Try to get user data from mobile API
-async function tryMobileApi(username: string, cookie: string): Promise<{ videos: TikTokMedia[]; secUid?: string }> {
-  const videos: TikTokMedia[] = [];
+// Get common headers for TikTok requests
+function getHeaders(cookie?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://www.tiktok.com/',
+    'Origin': 'https://www.tiktok.com',
+  };
   
+  if (cookie) {
+    headers['Cookie'] = cookie;
+  }
+  
+  return headers;
+}
+
+// Get user info and secUid
+async function getUserInfo(username: string, cookie?: string): Promise<{ 
+  secUid?: string; 
+  userId?: string;
+  nickname?: string;
+}> {
   try {
-    // First get user info via web to get secUid
-    const webResponse = await fetch(`https://www.tiktok.com/@${encodeURIComponent(username)}`, {
-      headers: getWebHeaders(cookie),
+    console.log('Fetching TikTok user info...');
+    
+    // Try the user detail API
+    const response = await fetch(`https://www.tiktok.com/api/user/detail/?uniqueId=${encodeURIComponent(username)}&secUid=`, {
+      headers: getHeaders(cookie),
     });
     
-    if (!webResponse.ok) {
-      console.log(`Web response failed: ${webResponse.status}`);
-      return { videos };
-    }
+    console.log(`User detail API status: ${response.status}`);
     
-    const html = await webResponse.text();
-    console.log(`Got HTML: ${html.length} bytes`);
-    
-    // Extract data from SIGI_STATE or UNIVERSAL_DATA
-    let secUid = "";
-    let itemsFromPage: any[] = [];
-    
-    // Try __UNIVERSAL_DATA_FOR_REHYDRATION__
-    const universalMatch = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([^<]+)<\/script>/);
-    if (universalMatch) {
-      try {
-        const data = JSON.parse(universalMatch[1]);
-        const defaultScope = data?.["__DEFAULT_SCOPE__"] || {};
-        
-        const userDetail = defaultScope["webapp.user-detail"];
-        secUid = userDetail?.userInfo?.user?.secUid || "";
-        
-        const userPost = defaultScope["webapp.user-post"];
-        itemsFromPage = userPost?.itemList || [];
-        
-        console.log(`UNIVERSAL_DATA: secUid=${secUid ? "found" : "none"}, items=${itemsFromPage.length}`);
-      } catch (e) {
-        console.log("Failed to parse UNIVERSAL_DATA");
+    if (response.ok) {
+      const data = await response.json();
+      const user = data?.userInfo?.user;
+      
+      if (user) {
+        console.log(`User found: ${user.uniqueId}, secUid: ${user.secUid?.slice(0, 20)}...`);
+        return {
+          secUid: user.secUid,
+          userId: user.id,
+          nickname: user.nickname,
+        };
       }
     }
     
-    // Try SIGI_STATE
-    const sigiMatch = html.match(/<script id="SIGI_STATE"[^>]*>([^<]+)<\/script>/);
-    if (sigiMatch) {
-      try {
-        const data = JSON.parse(sigiMatch[1]);
-        
-        if (!secUid) {
-          const userModule = data?.UserModule?.users || {};
-          const userData = Object.values(userModule)[0] as any;
-          secUid = userData?.secUid || "";
-        }
-        
-        const itemModule = data?.ItemModule || {};
-        const sigiItems = Object.values(itemModule) as any[];
-        
-        if (sigiItems.length > itemsFromPage.length) {
-          itemsFromPage = sigiItems;
-        }
-        
-        console.log(`SIGI_STATE: secUid=${secUid ? "found" : "none"}, items=${sigiItems.length}`);
-      } catch (e) {
-        console.log("Failed to parse SIGI_STATE");
-      }
-    }
+    // Fallback: try scraping the profile page
+    console.log('Trying profile page scraping...');
+    const pageResponse = await fetch(`https://www.tiktok.com/@${encodeURIComponent(username)}`, {
+      headers: getHeaders(cookie),
+    });
     
-    // Try __NEXT_DATA__
-    const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/);
-    if (nextDataMatch && itemsFromPage.length === 0) {
-      try {
-        const data = JSON.parse(nextDataMatch[1]);
-        const pageProps = data?.props?.pageProps;
-        
-        if (!secUid && pageProps?.userInfo?.user?.secUid) {
-          secUid = pageProps.userInfo.user.secUid;
-        }
-        
-        const items = pageProps?.items || [];
-        if (items.length > 0) {
-          itemsFromPage = items;
-          console.log(`NEXT_DATA: items=${items.length}`);
-        }
-      } catch (e) {
-        console.log("Failed to parse NEXT_DATA");
-      }
-    }
-    
-    // Parse items from page
-    for (const item of itemsFromPage) {
-      const video = parseVideoItem(item, username);
-      if (video) videos.push(video);
-    }
-    
-    console.log(`Parsed ${videos.length} videos from page`);
-    
-    // If we have secUid, try to get more via API (even if the initial HTML had 0 items)
-    if (secUid) {
-      console.log("Attempting to fetch via API...");
-
-      // Try the post list API with proper parameters
-      let cursor = 0;
-      let hasMore = true;
-      let attempts = 0;
-      const maxAttempts = 10;
-
-      while (hasMore && attempts < maxAttempts && videos.length < 500) {
-        attempts++;
-        await new Promise((r) => setTimeout(r, 900)); // basic rate limit
-
-        const apiUrl = `https://www.tiktok.com/api/post/item_list/?WebIdLastTime=${Math.floor(
-          Date.now() / 1000
-        )}&aid=1988&app_language=pt&app_name=tiktok_web&browser_language=pt-BR&browser_name=Mozilla&browser_online=true&browser_platform=Win32&browser_version=5.0&channel=tiktok_web&cookie_enabled=true&count=35&coverFormat=2&cursor=${cursor}&device_id=${Date.now()}&device_platform=web_pc&focus_state=true&from_page=user&history_len=2&is_fullscreen=false&is_page_visible=true&language=pt&os=windows&priority_region=&referer=&region=BR&screen_height=1080&screen_width=1920&secUid=${encodeURIComponent(
-          secUid
-        )}&tz_name=America/Sao_Paulo&webcast_language=pt`;
-
+    if (pageResponse.ok) {
+      const html = await pageResponse.text();
+      
+      // Try to find SIGI_STATE or similar data
+      const sigiMatch = html.match(/<script id="SIGI_STATE"[^>]*>([^<]+)<\/script>/);
+      if (sigiMatch) {
         try {
-          const apiResponse = await fetch(apiUrl, {
-            headers: {
-              ...getWebHeaders(cookie),
-              Accept: "application/json, text/plain, */*",
-              Referer: `https://www.tiktok.com/@${username}`,
-            },
-          });
-
-          if (!apiResponse.ok) {
-            console.log(`API response failed: ${apiResponse.status}`);
-            break;
+          const sigiData = JSON.parse(sigiMatch[1]);
+          const userData = Object.values(sigiData?.UserModule?.users || {})[0] as any;
+          if (userData) {
+            console.log(`Found via SIGI_STATE: ${userData.uniqueId}`);
+            return {
+              secUid: userData.secUid,
+              userId: userData.id,
+              nickname: userData.nickname,
+            };
           }
-
-          const apiText = await apiResponse.text();
-          if (apiText.length <= 50) {
-            console.log("Empty API response");
-            break;
-          }
-
-          const apiData = JSON.parse(apiText);
-          const newItems = apiData?.itemList || [];
-
-          console.log(`API page ${attempts}: ${newItems.length} items`);
-
-          for (const item of newItems) {
-            const video = parseVideoItem(item, username);
-            if (video && !videos.find((v) => v.id === video.id)) {
-              videos.push(video);
-            }
-          }
-
-          hasMore = Boolean(apiData?.hasMore);
-          cursor = Number(apiData?.cursor || 0);
-
-          // If API returns no items, stop early to avoid burning attempts
-          if (newItems.length === 0) break;
         } catch (e) {
-          console.log("API fetch error:", e);
-          break;
+          console.log('Failed to parse SIGI_STATE');
         }
+      }
+      
+      // Try __UNIVERSAL_DATA_FOR_REHYDRATION__
+      const universalMatch = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([^<]+)<\/script>/);
+      if (universalMatch) {
+        try {
+          const universalData = JSON.parse(universalMatch[1]);
+          const userDetail = universalData?.["__DEFAULT_SCOPE__"]?.["webapp.user-detail"]?.userInfo?.user;
+          if (userDetail) {
+            console.log(`Found via UNIVERSAL_DATA: ${userDetail.uniqueId}`);
+            return {
+              secUid: userDetail.secUid,
+              userId: userDetail.id,
+              nickname: userDetail.nickname,
+            };
+          }
+        } catch (e) {
+          console.log('Failed to parse UNIVERSAL_DATA');
+        }
+      }
+      
+      // Try regex for secUid
+      const secUidMatch = html.match(/"secUid":"([^"]+)"/);
+      if (secUidMatch) {
+        console.log(`Found secUid via regex: ${secUidMatch[1].slice(0, 20)}...`);
+        return { secUid: secUidMatch[1] };
       }
     }
     
-    return { videos, secUid };
   } catch (err) {
-    console.error("Error in tryMobileApi:", err);
-    return { videos };
+    console.log('User info fetch failed:', err);
   }
+  
+  return {};
+}
+
+// Fetch user posts
+async function fetchUserPosts(
+  secUid: string, 
+  count: number = 30, 
+  cursor: number = 0,
+  cookie?: string
+): Promise<{ items: any[]; hasMore: boolean; cursor: number }> {
+  try {
+    const url = `https://www.tiktok.com/api/post/item_list/?secUid=${encodeURIComponent(secUid)}&count=${count}&cursor=${cursor}`;
+    
+    const response = await fetch(url, {
+      headers: getHeaders(cookie),
+    });
+    
+    console.log(`Post list API status: ${response.status}`);
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`Got ${data.itemList?.length || 0} posts, hasMore: ${data.hasMore}`);
+      
+      return {
+        items: data.itemList || [],
+        hasMore: data.hasMore || false,
+        cursor: data.cursor || 0,
+      };
+    }
+  } catch (err) {
+    console.log('Post list fetch failed:', err);
+  }
+  
+  return { items: [], hasMore: false, cursor: 0 };
+}
+
+// Fetch all videos with pagination
+async function fetchAllVideos(username: string, maxVideos: number, cookie?: string): Promise<TikTokMedia[]> {
+  const results: TikTokMedia[] = [];
+  const seenIds = new Set<string>();
+  
+  // Get user info first
+  const userInfo = await getUserInfo(username, cookie);
+  
+  if (!userInfo.secUid) {
+    console.log('Could not get secUid - check if cookie is valid');
+    return results;
+  }
+  
+  console.log(`Fetching videos for secUid: ${userInfo.secUid.slice(0, 20)}...`);
+  
+  let cursor = 0;
+  let pageCount = 0;
+  const maxPages = 50;
+  
+  while (results.length < maxVideos && pageCount < maxPages) {
+    console.log(`Fetching page ${pageCount + 1}, cursor: ${cursor}...`);
+    
+    await new Promise(r => setTimeout(r, 500));
+    
+    const pageData = await fetchUserPosts(userInfo.secUid, 30, cursor, cookie);
+    
+    if (pageData.items.length === 0) {
+      console.log('No more items');
+      break;
+    }
+    
+    for (const item of pageData.items) {
+      const media = parsePostData(item);
+      if (media && !seenIds.has(media.id)) {
+        seenIds.add(media.id);
+        results.push(media);
+      }
+    }
+    
+    console.log(`Page ${pageCount + 1}: total ${results.length} videos`);
+    
+    if (!pageData.hasMore) {
+      console.log('No more pages');
+      break;
+    }
+    
+    cursor = pageData.cursor;
+    pageCount++;
+  }
+  
+  console.log(`Final count: ${results.length} videos`);
+  return results.slice(0, maxVideos);
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
-
+  
   try {
     const { username, limit = 50, cookie } = await req.json();
-
+    
     if (!username) {
       return new Response(
-        JSON.stringify({ success: false, error: "Username é obrigatório" }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: false, error: 'Username é obrigatório' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
       );
     }
-
-    const effectiveCookie = cookie || Deno.env.get("TIKTOK_COOKIE") || "";
+    
+    // Use cookie from request, or fallback to env
+    const effectiveCookie = cookie || Deno.env.get('TIKTOK_COOKIE') || '';
+    
+    const cleanUsername = extractUsername(username);
+    
+    console.log(`=== Fetching TikTok feed for: ${cleanUsername}, limit: ${limit}, hasCookie: ${!!effectiveCookie} ===`);
+    
     if (!effectiveCookie) {
       return new Response(
-        JSON.stringify({
-          success: false,
-          error:
-            "Cookie do TikTok não configurado. Configure seu cookie para acessar os vídeos.",
+        JSON.stringify({ 
+          success: false, 
+          error: 'Cookie do TikTok não configurado. Configure seu cookie para acessar os vídeos.' 
         }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 401 }
       );
     }
-
-    const cleanUsername = extractUsername(username);
-    console.log(`=== Fetching TikTok feed for: ${cleanUsername}, limit: ${limit} ===`);
-
-    const result = await tryMobileApi(cleanUsername, effectiveCookie);
-
-    if (result.videos.length === 0) {
-      // IMPORTANT: always return 200 so the client can display the error message,
-      // otherwise invoke() throws "Edge Function returned a non-2xx status code".
+    
+    const videos = await fetchAllVideos(cleanUsername, limit, effectiveCookie);
+    
+    if (videos.length === 0) {
       return new Response(
-        JSON.stringify({
-          success: false,
-          error: `Nenhum vídeo encontrado para @${cleanUsername}. Verifique se o perfil existe e está público, e se seu cookie está válido e atualizado.`,
+        JSON.stringify({ 
+          success: false, 
+          error: `Nenhum vídeo encontrado para @${cleanUsername}. Verifique se o perfil existe e possui vídeos, ou se seu cookie está válido.` 
         }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
       );
     }
-
-    // Limit results
-    const videos = result.videos.slice(0, Number(limit));
-
-    console.log(`=== Success: returning ${videos.length} videos ===`);
-
+    
     return new Response(
-      JSON.stringify({
-        success: true,
+      JSON.stringify({ 
+        success: true, 
         data: {
           username: cleanUsername,
           videos,
           totalCount: videos.length,
-          hasMore: result.videos.length > videos.length,
-        },
+          hasMore: false,
+        }
       }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
+    
   } catch (error) {
-    console.error("Error:", error);
-    // IMPORTANT: return 200 so the client gets a readable message.
+    console.error('Error:', error);
     return new Response(
-      JSON.stringify({ success: false, error: "Erro ao carregar perfil do TikTok" }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({ success: false, error: 'Erro ao carregar perfil do TikTok' }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
     );
   }
 });
