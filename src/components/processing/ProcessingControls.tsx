@@ -1,6 +1,13 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { DebugLogPanel } from '@/components/debug/DebugLogPanel';
 import { Play, Loader2, Download, Eye, Archive } from 'lucide-react';
 import type { VideoFile } from '@/components/video/VideoUpload';
@@ -12,11 +19,13 @@ interface ProcessingControlsProps {
   conversionProgress?: { current: number; total: number; filename: string; mode: 'mp4' | 'webm' | 'init' };
   overallProgress: number;
   canProcess: boolean;
+  singleDownloadFormat: 'mp4' | 'webm';
+  onSingleDownloadFormatChange: (format: 'mp4' | 'webm') => void;
   onPreview: () => void;
   onProcessAll: () => void;
   onDownloadAllMp4: () => void;
   onDownloadAllWebm: () => void;
-  onDownloadSingle: (videoId: string) => void;
+  onDownloadSingle: (videoId: string, format: 'mp4' | 'webm') => void;
   onCancelConversion?: () => void;
 }
 
@@ -27,6 +36,8 @@ export function ProcessingControls({
   conversionProgress,
   overallProgress,
   canProcess,
+  singleDownloadFormat,
+  onSingleDownloadFormatChange,
   onPreview,
   onProcessAll,
   onDownloadAllMp4,
@@ -148,14 +159,28 @@ export function ProcessingControls({
         {/* Individual download buttons for completed videos */}
         {hasCompleted && (
           <div className="mt-4 pt-4 border-t">
-            <p className="text-sm font-medium mb-2">Downloads individuais (MP4):</p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-2">
+              <p className="text-sm font-medium">Downloads individuais:</p>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Formato:</span>
+                <Select value={singleDownloadFormat} onValueChange={(v) => onSingleDownloadFormatChange(v as 'mp4' | 'webm')}>
+                  <SelectTrigger className="h-8 w-[120px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="mp4">MP4</SelectItem>
+                    <SelectItem value="webm">WebM</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
             <div className="flex flex-wrap gap-2">
               {completedVideos.map((video) => (
                 <Button
                   key={video.id}
                   variant="ghost"
                   size="sm"
-                  onClick={() => onDownloadSingle(video.id)}
+                  onClick={() => onDownloadSingle(video.id, singleDownloadFormat)}
                   disabled={isConverting}
                   className="text-xs"
                 >
