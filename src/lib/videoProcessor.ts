@@ -76,6 +76,22 @@ export async function processVideo(
   video.playbackRate = 1;
   video.muted = false; // Must be false for AudioContext capture to work
   video.volume = 0.001; // Near-silent but not muted (allows audio capture)
+
+  // IMPORTANT: Keep the <video> attached to the DOM during processing.
+  // Some browsers can decode / update frames unreliably when the element is never attached,
+  // which results in "audio only" outputs.
+  const domHost = document.createElement('div');
+  domHost.setAttribute('data-processing-video-host', 'true');
+  domHost.style.position = 'fixed';
+  domHost.style.left = '-99999px';
+  domHost.style.top = '0';
+  domHost.style.width = '1px';
+  domHost.style.height = '1px';
+  domHost.style.overflow = 'hidden';
+  domHost.style.pointerEvents = 'none';
+  domHost.style.opacity = '0';
+  domHost.appendChild(video);
+  document.body.appendChild(domHost);
   
   const videoUrl = URL.createObjectURL(videoFile);
   
@@ -375,7 +391,8 @@ export async function processVideo(
       
       // Schedule next frame using the best available method
       if (typeof anyVideo.requestVideoFrameCallback === 'function') {
-        anyVideo.requestVideoFrameCallback(onFrame);
+        // Must keep correct `this` binding to avoid "Illegal invocation" in some browsers.
+        anyVideo.requestVideoFrameCallback.call(video, onFrame);
       } else {
         animationId = requestAnimationFrame(onFrame);
       }
@@ -383,13 +400,30 @@ export async function processVideo(
     
     // Start the frame loop
     if (typeof anyVideo.requestVideoFrameCallback === 'function') {
-      anyVideo.requestVideoFrameCallback(onFrame);
+      anyVideo.requestVideoFrameCallback.call(video, onFrame);
     } else {
       animationId = requestAnimationFrame(onFrame);
     }
   };
 
   return new Promise<Blob>((resolve, reject) => {
+    let flushIntervalId: number | null = null;
+
+    const cleanup = () => {
+      try {
+        if (flushIntervalId) window.clearInterval(flushIntervalId);
+      } catch {}
+
+      // Stop any active stream tracks to reduce resource contention across runs
+      try {
+        for (const t of combinedStream.getTracks()) t.stop();
+      } catch {}
+
+      try {
+        domHost.remove();
+      } catch {}
+    };
+
     recorder.onstop = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
@@ -397,6 +431,8 @@ export async function processVideo(
       try {
         audioContext?.close();
       } catch {}
+
+      cleanup();
 
       setTimeout(async () => {
         if (chunks.length === 0) {
@@ -461,6 +497,7 @@ export async function processVideo(
       try {
         audioContext?.close();
       } catch {}
+      cleanup();
       reject(new Error('Erro na gravação do vídeo'));
     };
 
@@ -470,6 +507,7 @@ export async function processVideo(
       try {
         audioContext?.close();
       } catch {}
+      cleanup();
       reject(new Error('Erro durante reprodução do vídeo'));
     };
 
@@ -489,13 +527,25 @@ export async function processVideo(
         await attachAudioTrack();
       } catch {}
 
-      // Start recording immediately - the stutter in the first second will be
-      // removed by FFmpeg post-processing (trimStartWithFFmpeg).
-      // We removed the warmup delay because it was causing frames to be lost
-      // (scheduleFrames was running but recorder wasn't capturing).
-      recorder.start(100);
+      // Prime a first frame so the canvas track has real pixels before recording starts.
+      // This helps prevent outputs that contain only audio (no visible frames).
+      try {
+        renderFrame();
+      } catch {}
+
+      // Use a larger timeslice and periodic flush to reduce audio stutter / encoder stalls.
+      recorder.start(1000);
+      flushIntervalId = window.setInterval(() => {
+        if (!isRecording) return;
+        if (recorder.state !== 'recording') return;
+        try {
+          recorder.requestData();
+        } catch {}
+      }, 1000);
+
       scheduleFrames();
     }).catch((err2) => {
+      cleanup();
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
     });
   });
