@@ -719,24 +719,24 @@ export async function processAdvancedVideo(
         }
       };
 
-       const rVFC = (video as any).requestVideoFrameCallback as
-         | ((cb: (now: number, meta: any) => void) => number)
-         | undefined;
+       const rVFCMethod = (video as any).requestVideoFrameCallback;
 
-       if (typeof rVFC === 'function') {
+       if (typeof rVFCMethod === 'function') {
          const tick = (now: number) => {
            if (timerStopped) return;
            drawFrame(now);
            if (!timerStopped) {
              try {
-               rVFC(tick);
+               // Use correct 'this' context to avoid "Illegal invocation"
+               rVFCMethod.call(video, tick);
              } catch {
                timerStopped = true;
                recorder?.stop();
              }
            }
          };
-         rVFC(tick);
+         // Use correct 'this' context to avoid "Illegal invocation"
+         rVFCMethod.call(video, tick);
        } else {
          // Fallback to setInterval
          const intervalId = window.setInterval(() => {
