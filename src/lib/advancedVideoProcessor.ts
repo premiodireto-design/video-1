@@ -410,6 +410,7 @@ export async function processAdvancedVideo(
       });
 
       const duration = video.duration;
+      const trimEndSeconds = 1.0; // cut 1s from the end only
 
       // Transcription for captions
       let transcription: Transcription = { text: '', words: [], detectedLanguage: 'unknown' };
@@ -653,9 +654,10 @@ export async function processAdvancedVideo(
       const drawFrame = () => {
         if (timerStopped) return;
 
-        if (video.paused || video.ended) {
+        // Stop slightly before the end (trimming) to avoid end-of-file decoder stalls
+         if (video.currentTime >= Math.max(0, duration - trimEndSeconds) || video.paused || video.ended) {
           timerStopped = true;
-          recorder.stop();
+           recorder?.stop();
           try { timerCtx?.close(); } catch {}
           return;
         }
@@ -696,8 +698,9 @@ export async function processAdvancedVideo(
         }
 
         // Update progress (throttled) — prevents UI re-renders from causing frame drops.
-        const nowP = performance.now();
-        const progress = Math.round(25 + (video.currentTime / duration) * 70);
+         const nowP = performance.now();
+         const denom = Math.max(0.001, duration - trimEndSeconds);
+         const progress = Math.round(25 + (Math.min(video.currentTime, denom) / denom) * 70);
         if ((nowP - lastProgressAt) > 250 && progress !== lastProgressValue) {
           lastProgressAt = nowP;
           lastProgressValue = progress;
