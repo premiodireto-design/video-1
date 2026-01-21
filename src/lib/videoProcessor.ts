@@ -87,12 +87,15 @@ export async function processVideo(
   });
 
   const duration = video.duration;
-  const trimStart = 0.5; // Cortar 0.5s do início
-  const trimEnd = 0.5; // Cortar 0.5s do final
+  // Trimming strategy:
+  // - Do NOT cut the start (avoids an initial seek which can cause decoder hiccups / uneven cadence)
+  // - Cut only 1s from the end
+  const trimStart = 0; // do not cut start
+  const trimEnd = 1.0; // cut 1s from the end
   const effectiveDuration = Math.max(0.5, duration - trimStart - trimEnd);
   
-  // Set video to start after trim
-  video.currentTime = trimStart;
+  // Start from the beginning
+  video.currentTime = 0;
   
   await new Promise<void>((res) => {
     video.onseeked = () => res();
@@ -302,7 +305,7 @@ export async function processVideo(
 
   let animationId: number = 0;
   let isRecording = true;
-  const endTime = duration - trimEnd;
+  const endTime = Math.max(0, duration - trimEnd);
 
   // Progress throttling is CRITICAL for smooth output.
   // React state updates during recording can block the main thread and cause frame freezes.
