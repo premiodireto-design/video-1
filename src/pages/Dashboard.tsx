@@ -28,6 +28,7 @@ export default function Dashboard() {
     removeBlackBars: false,
     watermark: '',
     useAiFraming: true, // Enabled by default
+    useOriginalFps: true, // Match original video FPS by default
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
@@ -513,6 +514,7 @@ export default function Dashboard() {
               settings={settings}
               onSettingsChange={setSettings}
               disabled={isProcessing}
+              testVideoFile={videos.length > 0 ? videos[0].file : null}
             />
           </div>
         </div>

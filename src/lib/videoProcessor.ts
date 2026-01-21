@@ -9,6 +9,7 @@ export interface ProcessingSettings {
   removeBlackBars: boolean;
   watermark?: string; // Optional @ handle for watermark
   useAiFraming?: boolean; // Use AI to detect faces and position video
+  useOriginalFps?: boolean; // Match export FPS to original video FPS
 }
 
 export interface ProcessingProgress {
@@ -226,7 +227,8 @@ export async function processVideo(
 
   // Set up MediaRecorder (video from canvas + audio from the source video)
   // IMPORTANT: keep capture FPS aligned with our render cadence.
-  // When maxQuality is OFF, we still try to match the *original* FPS (up to 60) to avoid perceived stutter.
+  // When useOriginalFps is ON, we'll detect and match the source FPS.
+  // When maxQuality is ON, default to 60fps; otherwise 30fps (will be overridden if useOriginalFps).
   let targetFps = settings.maxQuality ? 60 : 30;
 
   // Prefer MP4 when supported (requested). If the browser can't record MP4 reliably,
@@ -527,10 +529,12 @@ export async function processVideo(
       } catch {}
 
       // Estimate source FPS while playing to avoid output stutter (30fps export from 60fps sources looks like "travando").
-      if (!settings.maxQuality) {
+      // Always detect when useOriginalFps is ON, or when maxQuality is OFF.
+      if (settings.useOriginalFps || !settings.maxQuality) {
         const estimated = await estimateVideoFps(video);
         if (estimated) {
           targetFps = clampFps(Math.round(estimated));
+          console.log(`[VideoProcessor] Using detected FPS: ${targetFps}`);
         }
       }
 
