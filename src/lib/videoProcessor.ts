@@ -489,9 +489,23 @@ export async function processVideo(
         await attachAudioTrack();
       } catch {}
 
-      // Start recording only after we tried attaching audio
-      recorder.start(100);
+      // Warmup: render a bit BEFORE starting MediaRecorder.
+      // This avoids capturing encoder/video warmup stalls as the first second of the file.
+      // (Even if we also trim later, this improves stability a lot.)
+      const warmupMs = 1000;
       scheduleFrames();
+
+      window.setTimeout(() => {
+        if (!isRecording) return;
+        if (recorder.state === 'inactive') {
+          try {
+            recorder.start(100);
+          } catch (e) {
+            console.error('[VideoProcessor] Failed to start recorder after warmup:', e);
+            reject(new Error('Falha ao iniciar gravação do vídeo'));
+          }
+        }
+      }, warmupMs);
     }).catch((err2) => {
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
     });
