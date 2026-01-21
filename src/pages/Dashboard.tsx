@@ -222,8 +222,9 @@ export default function Dashboard() {
     });
 
     try {
-      const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
+        const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
         signal: conversionAbortRef.current.signal,
+          targetFps: (video.outputBlob as any).__targetFps,
         onProgress: (p) => {
           setConversionProgress({ current: p, total: 100, filename: video.name, mode: 'mp4' });
         },
@@ -314,8 +315,9 @@ export default function Dashboard() {
           if (video.outputBlob.type.includes('mp4')) {
             zip.file(filename, video.outputBlob);
           } else {
-            const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
+              const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
               signal: conversionAbortRef.current?.signal,
+                targetFps: (video.outputBlob as any).__targetFps,
             });
             zip.file(filename, mp4Blob);
           }

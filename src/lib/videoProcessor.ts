@@ -231,12 +231,12 @@ export async function processVideo(
   // When maxQuality is ON, default to 60fps; otherwise 30fps (will be overridden if useOriginalFps).
   let targetFps = settings.maxQuality ? 60 : 30;
 
-  // Prefer MP4 when supported (requested). If the browser can't record MP4 reliably,
-  // we fail fast with a clear error instead of silently switching formats.
+  // Recording strategy (Chrome): WebM is more stable for long canvas recordings.
+  // We'll record WebM (VP9/VP8) and convert to MP4 at download time when needed.
   const preferredTypes = [
-    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-    'video/mp4;codecs=avc1,mp4a.40.2',
-    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
   ];
 
   const mimeType = preferredTypes.find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
@@ -475,6 +475,8 @@ export async function processVideo(
         }
 
         const blob = new Blob(chunks, { type: recorder?.mimeType || mimeType });
+        // Attach capture FPS so conversion can keep the cadence.
+        (blob as any).__targetFps = targetFps;
 
         if (blob.size < 1000) {
           reject(new Error('Vídeo gerado está vazio ou corrompido'));
@@ -550,7 +552,7 @@ export async function processVideo(
       } catch {}
 
       if (!mimeType) {
-        reject(new Error('Seu navegador não suporta gravação direta em MP4.'));
+        reject(new Error('Seu navegador não suporta gravação em WebM.'));
         return;
       }
 
@@ -565,9 +567,8 @@ export async function processVideo(
       recorder.onstop = handleStop;
       recorder.onerror = handleError;
 
-      // For MP4, avoid timeslice chunking (some browsers produce broken MP4 fragments).
-      // For WebM (not used here), timeslice would be fine.
-      recorder.start();
+      // For WebM, using a 1s timeslice reduces memory spikes and helps prevent long stalls.
+      recorder.start(1000);
 
       // Some browsers will stall MP4 unless data is periodically flushed.
       // requestData() forces the encoder to emit buffered data and reduces long "freeze" spans.
