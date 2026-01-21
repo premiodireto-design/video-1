@@ -32,6 +32,14 @@ export async function runFluidityTest(
   video.crossOrigin = 'anonymous';
   video.muted = true;
   video.volume = 0;
+  // Some Chrome builds are stricter when the media element isn't in the DOM.
+  // Keep it attached (hidden) during the test.
+  video.style.position = 'fixed';
+  video.style.left = '-99999px';
+  video.style.top = '-99999px';
+  video.style.width = '1px';
+  video.style.height = '1px';
+  document.body.appendChild(video);
 
   const videoUrl = URL.createObjectURL(videoFile);
 
@@ -71,6 +79,7 @@ export async function runFluidityTest(
   } catch (playError) {
     console.warn('[FluidityTest] Play failed:', playError);
     URL.revokeObjectURL(videoUrl);
+    try { video.remove(); } catch {}
     // Return default values if playback fails
     return {
       originalFps: 30,
@@ -194,6 +203,7 @@ export async function runFluidityTest(
 
   video.pause();
   URL.revokeObjectURL(videoUrl);
+  try { video.remove(); } catch {}
 
   const expectedFrames = Math.round(testDuration * originalFps);
   const totalFrames = framesRendered + droppedFrames;

@@ -576,7 +576,9 @@ export async function processAdvancedVideo(
           audioContext.close();
         }
         
-        const blob = new Blob(chunks, { type: recorder?.mimeType || 'video/mp4' });
+        const blob = new Blob(chunks, { type: recorder?.mimeType || 'video/webm' });
+        // Attach capture FPS so conversion can keep cadence.
+        (blob as any).__targetFps = fps;
         onProgress({ videoId, progress: 100, stage: 'done', message: 'Concluído!' });
         resolve(blob);
       };
@@ -605,13 +607,13 @@ export async function processAdvancedVideo(
       destNode.stream.getAudioTracks().forEach((track) => stream!.addTrack(track));
 
       const mimeType = [
-        'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-        'video/mp4;codecs=avc1,mp4a.40.2',
-        'video/mp4',
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
       ].find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
 
       if (!mimeType) {
-        throw new Error('Seu navegador não suporta gravação direta em MP4 no Modo Avançado.');
+        throw new Error('Seu navegador não suporta gravação em WebM no Modo Avançado.');
       }
 
       recorder = new MediaRecorder(stream, {
@@ -647,8 +649,8 @@ export async function processAdvancedVideo(
         dubbedAudioSource.start(0);
       }
 
-      // For MP4, avoid timeslice chunking (can generate broken fragmented MP4)
-      recorder.start();
+      // For WebM, use a timeslice to reduce memory spikes and stalls.
+      recorder.start(1000);
 
        // Frame pacing: prefer requestVideoFrameCallback in Chrome.
        // The previous AudioContext-oscillator timer allocated an oscillator every frame,
