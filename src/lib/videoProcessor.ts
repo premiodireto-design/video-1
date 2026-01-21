@@ -289,6 +289,7 @@ export async function processVideo(
   // NOTE: We'll create the MediaRecorder only AFTER we successfully attached an audio track.
   // Some browsers get unstable (frozen video w/ audio) when tracks are added after recording starts.
   let recorder: MediaRecorder | null = null;
+  let flushTimer: number | null = null;
 
   const chunks: Blob[] = [];
 
@@ -416,6 +417,11 @@ export async function processVideo(
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
 
+      if (flushTimer) {
+        window.clearInterval(flushTimer);
+        flushTimer = null;
+      }
+
       try {
         audioContext?.close();
       } catch {}
@@ -447,6 +453,11 @@ export async function processVideo(
     const handleError = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
+
+      if (flushTimer) {
+        window.clearInterval(flushTimer);
+        flushTimer = null;
+      }
       try {
         audioContext?.close();
       } catch {}
@@ -501,6 +512,19 @@ export async function processVideo(
       // For MP4, avoid timeslice chunking (some browsers produce broken MP4 fragments).
       // For WebM (not used here), timeslice would be fine.
       recorder.start();
+
+      // Some browsers will stall MP4 unless data is periodically flushed.
+      // requestData() forces the encoder to emit buffered data and reduces long "freeze" spans.
+      flushTimer = window.setInterval(() => {
+        try {
+          if (recorder && recorder.state === 'recording' && typeof recorder.requestData === 'function') {
+            recorder.requestData();
+          }
+        } catch {
+          // ignore
+        }
+      }, 1000);
+
       scheduleFrames();
     }).catch((err2) => {
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));

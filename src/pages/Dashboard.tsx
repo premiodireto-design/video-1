@@ -31,6 +31,7 @@ export default function Dashboard() {
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
+  const [singleDownloadFormat, setSingleDownloadFormat] = useState<'mp4' | 'webm'>('mp4');
   const conversionAbortRef = useRef<AbortController | null>(null);
   const [conversionProgress, setConversionProgress] = useState<{ current: number; total: number; filename: string; mode: 'mp4' | 'webm' | 'init' }>({ current: 0, total: 0, filename: '', mode: 'init' });
   const { toast } = useToast();
@@ -163,11 +164,34 @@ export default function Dashboard() {
     });
   }, [toast]);
 
-  const handleDownloadSingle = useCallback(async (videoId: string) => {
+  const handleDownloadSingle = useCallback(async (videoId: string, format: 'mp4' | 'webm') => {
     const video = videos.find(v => v.id === videoId);
     if (!video?.outputBlob) return;
 
     const isAlreadyMp4 = video.outputBlob.type.includes('mp4');
+    const isWebm = video.outputBlob.type.includes('webm');
+
+    // If user chose WebM, only download WebM when available (no conversion).
+    if (format === 'webm') {
+      if (!isWebm) {
+        toast({
+          title: 'WebM indisponível',
+          description: 'Este vídeo foi gerado em MP4. Baixando MP4.',
+        });
+      }
+
+      const blobToDownload = isWebm ? video.outputBlob : video.outputBlob;
+      const ext = isWebm ? 'webm' : 'mp4';
+      const url = URL.createObjectURL(blobToDownload);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = video.name.replace(/\.[^/.]+$/, '') + `_canva.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      return;
+    }
 
     // If we already produced MP4, download instantly (no conversion)
     if (isAlreadyMp4) {
@@ -502,6 +526,8 @@ export default function Dashboard() {
             conversionProgress={conversionProgress}
             overallProgress={overallProgress}
             canProcess={canProcess}
+            singleDownloadFormat={singleDownloadFormat}
+            onSingleDownloadFormatChange={setSingleDownloadFormat}
             onPreview={handlePreview}
             onProcessAll={handleProcessAll}
             onDownloadAllMp4={handleDownloadAllMp4}
