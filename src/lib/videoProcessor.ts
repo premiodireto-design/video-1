@@ -75,18 +75,6 @@ export async function processVideo(
   video.playbackRate = 1;
   video.muted = false; // Must be false for AudioContext capture to work
   video.volume = 0.001; // Near-silent but not muted (allows audio capture)
-
-  // Some browsers are more stable when the video element is actually attached to the DOM.
-  // We keep it hidden during processing.
-  const hiddenContainer = document.createElement('div');
-  hiddenContainer.style.position = 'fixed';
-  hiddenContainer.style.left = '-99999px';
-  hiddenContainer.style.top = '0';
-  hiddenContainer.style.width = '1px';
-  hiddenContainer.style.height = '1px';
-  hiddenContainer.style.overflow = 'hidden';
-  hiddenContainer.appendChild(video);
-  document.body.appendChild(hiddenContainer);
   
   const videoUrl = URL.createObjectURL(videoFile);
   
@@ -306,10 +294,6 @@ export async function processVideo(
   let isRecording = true;
   const endTime = duration - trimEnd;
 
-  // Helps prevent a freeze/stutter at the very beginning in some encoders.
-  // (We also request one final flush right before stopping.)
-  let flushInterval: number | null = null;
-
   const renderFrame = () => {
     // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
@@ -366,12 +350,6 @@ export async function processVideo(
     try {
       renderFrame();
     } catch {}
-
-    try {
-      // Flush pending encoder data before stopping.
-      recorder.requestData();
-    } catch {}
-
     setTimeout(() => {
       if (recorder.state === 'recording') {
         recorder.stop();
@@ -415,20 +393,6 @@ export async function processVideo(
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
 
-      if (flushInterval) {
-        window.clearInterval(flushInterval);
-        flushInterval = null;
-      }
-
-      try {
-        // Stop tracks to avoid resource contention.
-        combinedStream.getTracks().forEach((t) => t.stop());
-      } catch {}
-
-      try {
-        hiddenContainer.remove();
-      } catch {}
-
       try {
         audioContext?.close();
       } catch {}
@@ -460,20 +424,6 @@ export async function processVideo(
     recorder.onerror = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
-
-      if (flushInterval) {
-        window.clearInterval(flushInterval);
-        flushInterval = null;
-      }
-
-      try {
-        combinedStream.getTracks().forEach((t) => t.stop());
-      } catch {}
-
-      try {
-        hiddenContainer.remove();
-      } catch {}
-
       try {
         audioContext?.close();
       } catch {}
@@ -483,20 +433,6 @@ export async function processVideo(
     video.onerror = () => {
       stopRecording();
       cancelAnimationFrame(animationId);
-
-      if (flushInterval) {
-        window.clearInterval(flushInterval);
-        flushInterval = null;
-      }
-
-      try {
-        combinedStream.getTracks().forEach((t) => t.stop());
-      } catch {}
-
-      try {
-        hiddenContainer.remove();
-      } catch {}
-
       try {
         audioContext?.close();
       } catch {}
@@ -519,50 +455,8 @@ export async function processVideo(
         await attachAudioTrack();
       } catch {}
 
-      // Warm up: render a few frames BEFORE starting the recorder.
-      // This avoids the common "first second stutter" where the encoder starts before frames are flowing.
-      try {
-        renderFrame();
-      } catch {}
-
-      await new Promise<void>((warmRes) => {
-        const anyVideo = video as any;
-        let frames = 0;
-        const maxWait = window.setTimeout(() => warmRes(), 750);
-        const onWarmFrame = () => {
-          frames++;
-          try {
-            renderFrame();
-          } catch {}
-          if (frames >= 3) {
-            window.clearTimeout(maxWait);
-            warmRes();
-            return;
-          }
-          if (typeof anyVideo.requestVideoFrameCallback === 'function') {
-            anyVideo.requestVideoFrameCallback(onWarmFrame);
-          } else {
-            requestAnimationFrame(onWarmFrame);
-          }
-        };
-
-        if (typeof anyVideo.requestVideoFrameCallback === 'function') {
-          anyVideo.requestVideoFrameCallback(onWarmFrame);
-        } else {
-          requestAnimationFrame(onWarmFrame);
-        }
-      });
-
-      // Start recording only after warmup.
-      recorder.start(1000);
-
-      // Periodic flush prevents encoder stalls/frozen segments in long runs.
-      flushInterval = window.setInterval(() => {
-        try {
-          if (recorder.state === 'recording') recorder.requestData();
-        } catch {}
-      }, 1000);
-
+      // Start recording only after we tried attaching audio
+      recorder.start(100);
       scheduleFrames();
     }).catch((err2) => {
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
