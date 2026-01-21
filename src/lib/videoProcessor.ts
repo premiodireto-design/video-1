@@ -1,7 +1,7 @@
 import type { GreenArea } from './greenDetection';
 import { captureVideoFrame, analyzeVideoFrame, calculateSmartPosition, type FrameAnalysis } from './frameAnalyzer';
 import { clampFps, estimateVideoFps } from './videoFps';
-
+import { validateVideoBlob, getFallbackRecordingOptions } from './videoValidation';
 export interface ProcessingSettings {
   fitMode: 'cover' | 'contain';
   normalizeAudio: boolean;
@@ -377,14 +377,29 @@ export async function processVideo(
   const stopRecording = () => {
     if (!isRecording) return;
     isRecording = false;
+    
+    // Render one last frame
     try {
       renderFrame();
     } catch {}
+    
+    // CRITICAL: Force flush any remaining data before stopping
+    // This prevents the WebM from being truncated/corrupted
     setTimeout(() => {
       if (recorder && recorder.state === 'recording') {
-        recorder.stop();
+        try {
+          // Request any pending data before stopping
+          recorder.requestData();
+        } catch {}
+        
+        // Small delay to let the data flush
+        setTimeout(() => {
+          if (recorder && recorder.state === 'recording') {
+            recorder.stop();
+          }
+        }, 150);
       }
-    }, 300);
+    }, 200);
   };
 
   // Frame scheduling: Use a precise AudioContext-based timer for consistent frame cadence.
@@ -449,145 +464,298 @@ export async function processVideo(
     }, frameInterval);
   };
 
-  return new Promise<Blob>((resolve, reject) => {
-    const handleStop = () => {
-      URL.revokeObjectURL(videoUrl);
-      cancelAnimationFrame(animationId);
+  // Track if we're in fallback mode (VP8 instead of VP9)
+  let useFallbackMode = false;
+  let retryAttempted = false;
 
-      // Stop AudioContext timer if running
-      try {
-        (window as any).__videoProcessorStopTimer?.();
-      } catch {}
+  const doProcessing = (): Promise<Blob> => {
+    return new Promise<Blob>((resolve, reject) => {
+      let stopCompleted = false;
+      let dataReceivedAfterStop = false;
+      
+      const handleStop = () => {
+        // Wait a bit for any final ondataavailable events
+        const finalizeRecording = () => {
+          if (stopCompleted) return;
+          stopCompleted = true;
+          
+          URL.revokeObjectURL(videoUrl);
+          cancelAnimationFrame(animationId);
 
-      if (flushTimer) {
-        window.clearInterval(flushTimer);
-        flushTimer = null;
-      }
+          // Stop AudioContext timer if running
+          try {
+            (window as any).__videoProcessorStopTimer?.();
+          } catch {}
 
-      try {
-        audioContext?.close();
-      } catch {}
+          if (flushTimer) {
+            window.clearInterval(flushTimer);
+            flushTimer = null;
+          }
 
-      setTimeout(() => {
-        if (chunks.length === 0) {
-          reject(new Error('Nenhum dado de vídeo foi capturado'));
+          // Stop all tracks to prevent resource leaks
+          try {
+            const combinedStream = recorder?.stream;
+            if (combinedStream) {
+              combinedStream.getTracks().forEach(track => {
+                try { track.stop(); } catch {}
+              });
+            }
+          } catch {}
+
+          try {
+            audioContext?.close();
+          } catch {}
+
+          // Give a bit more time for final data to arrive
+          setTimeout(() => {
+            if (chunks.length === 0) {
+              reject(new Error('Nenhum dado de vídeo foi capturado'));
+              return;
+            }
+
+            const blob = new Blob(chunks, { type: recorder?.mimeType || mimeType });
+            // Attach capture FPS so conversion can keep the cadence.
+            (blob as any).__targetFps = targetFps;
+            (blob as any).__usedFallback = useFallbackMode;
+
+            console.log(`[VideoProcessor] Recording complete: ${chunks.length} chunks, ${(blob.size / 1024 / 1024).toFixed(2)} MB, mimeType: ${recorder?.mimeType || mimeType}`);
+
+            if (blob.size < 1000) {
+              reject(new Error('Vídeo gerado está vazio ou corrompido'));
+              return;
+            }
+
+            onProgress({
+              videoId,
+              progress: 100,
+              stage: 'done',
+              message: 'Concluído!',
+            });
+
+            resolve(blob);
+          }, 300);
+        };
+
+        // Wait for final data chunk after stop
+        if (!dataReceivedAfterStop) {
+          setTimeout(finalizeRecording, 500);
+        } else {
+          finalizeRecording();
+        }
+      };
+
+      const handleError = () => {
+        URL.revokeObjectURL(videoUrl);
+        cancelAnimationFrame(animationId);
+
+        if (flushTimer) {
+          window.clearInterval(flushTimer);
+          flushTimer = null;
+        }
+        try {
+          audioContext?.close();
+        } catch {}
+        reject(new Error('Erro na gravação do vídeo'));
+      };
+
+      video.onerror = () => {
+        stopRecording();
+        cancelAnimationFrame(animationId);
+        try {
+          audioContext?.close();
+        } catch {}
+        reject(new Error('Erro durante reprodução do vídeo'));
+      };
+
+      // Video must NOT be muted for audio capture to work properly
+      // We set volume very low instead to avoid audible playback
+      video.muted = false;
+      video.volume = 0.001;
+
+      // Start playback from trim point
+      video.play().then(async () => {
+        try {
+          await audioContext?.resume();
+        } catch {}
+
+        // Estimate source FPS while playing to avoid output stutter (30fps export from 60fps sources looks like "travando").
+        // Always detect when useOriginalFps is ON, or when maxQuality is OFF.
+        if (settings.useOriginalFps || !settings.maxQuality) {
+          const estimated = await estimateVideoFps(video);
+          if (estimated) {
+            targetFps = clampFps(Math.round(estimated));
+            console.log(`[VideoProcessor] Using detected FPS: ${targetFps}`);
+          }
+        }
+
+        const canvasStream = canvas.captureStream(targetFps);
+        // We start with the canvas video track, then (after playback starts) we attach an audio track.
+        const combinedStream = new MediaStream(canvasStream.getVideoTracks());
+
+        // Attach audio track AFTER playback starts (more reliable across browsers)
+        try {
+          const ok = await attachAudioTrack(combinedStream);
+          if (!ok) {
+            reject(new Error('Não foi possível capturar o áudio do vídeo'));
+            return;
+          }
+        } catch {}
+
+        // Select mimeType based on fallback mode
+        let selectedMimeType: string;
+        let selectedBitrate: number;
+        
+        if (useFallbackMode) {
+          const fallback = getFallbackRecordingOptions();
+          selectedMimeType = fallback.preferredMimeTypes.find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
+          selectedBitrate = fallback.videoBitsPerSecond;
+          console.log('[VideoProcessor] Using fallback mode (VP8):', selectedMimeType);
+        } else {
+          selectedMimeType = mimeType;
+          selectedBitrate = settings.maxQuality ? 12000000 : 6000000;
+        }
+
+        if (!selectedMimeType) {
+          reject(new Error('Seu navegador não suporta gravação em WebM.'));
           return;
         }
 
-        const blob = new Blob(chunks, { type: recorder?.mimeType || mimeType });
-        // Attach capture FPS so conversion can keep the cadence.
-        (blob as any).__targetFps = targetFps;
+        // Conservative bitrates reduce encode stalls (which cause stutter) and help A/V sync.
+        recorder = new MediaRecorder(combinedStream, {
+          mimeType: selectedMimeType,
+          videoBitsPerSecond: selectedBitrate,
+          audioBitsPerSecond: useFallbackMode ? 128000 : 160000,
+        });
 
-        if (blob.size < 1000) {
-          reject(new Error('Vídeo gerado está vazio ou corrompido'));
-          return;
-        }
+        // Enhanced data handler to track post-stop data
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            chunks.push(e.data);
+            if (recorder?.state === 'inactive') {
+              dataReceivedAfterStop = true;
+            }
+          }
+        };
+        
+        recorder.onstop = handleStop;
+        recorder.onerror = handleError;
 
+        // For WebM, using a 1s timeslice reduces memory spikes and helps prevent long stalls.
+        recorder.start(1000);
+
+        // Some browsers will stall MP4 unless data is periodically flushed.
+        // requestData() forces the encoder to emit buffered data and reduces long "freeze" spans.
+        flushTimer = window.setInterval(() => {
+          try {
+            if (recorder && recorder.state === 'recording' && typeof recorder.requestData === 'function') {
+              recorder.requestData();
+            }
+          } catch {
+            // ignore
+          }
+        }, 1000);
+
+        scheduleFrames();
+      }).catch((err2) => {
+        reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
+      });
+    });
+  };
+
+  // Main processing flow with validation and auto-retry
+  return new Promise<Blob>(async (resolve, reject) => {
+    try {
+      // First attempt
+      const blob = await doProcessing();
+      
+      // Validate the output
+      onProgress({
+        videoId,
+        progress: 98,
+        stage: 'encoding',
+        message: 'Validando arquivo...',
+      });
+      
+      const validation = await validateVideoBlob(blob, 6000);
+      
+      if (validation.valid) {
+        console.log('[VideoProcessor] Video validation passed');
         onProgress({
           videoId,
           progress: 100,
           stage: 'done',
           message: 'Concluído!',
         });
-
         resolve(blob);
-      }, 200);
-    };
-
-    const handleError = () => {
-      URL.revokeObjectURL(videoUrl);
-      cancelAnimationFrame(animationId);
-
-      if (flushTimer) {
-        window.clearInterval(flushTimer);
-        flushTimer = null;
-      }
-      try {
-        audioContext?.close();
-      } catch {}
-      reject(new Error('Erro na gravação do vídeo'));
-    };
-
-    video.onerror = () => {
-      stopRecording();
-      cancelAnimationFrame(animationId);
-      try {
-        audioContext?.close();
-      } catch {}
-      reject(new Error('Erro durante reprodução do vídeo'));
-    };
-
-    // Video must NOT be muted for audio capture to work properly
-    // We set volume very low instead to avoid audible playback
-    video.muted = false;
-    video.volume = 0.001;
-
-    // Start playback from trim point
-    video.play().then(async () => {
-      try {
-        await audioContext?.resume();
-      } catch {}
-
-      // Estimate source FPS while playing to avoid output stutter (30fps export from 60fps sources looks like "travando").
-      // Always detect when useOriginalFps is ON, or when maxQuality is OFF.
-      if (settings.useOriginalFps || !settings.maxQuality) {
-        const estimated = await estimateVideoFps(video);
-        if (estimated) {
-          targetFps = clampFps(Math.round(estimated));
-          console.log(`[VideoProcessor] Using detected FPS: ${targetFps}`);
-        }
-      }
-
-      const canvasStream = canvas.captureStream(targetFps);
-      // We start with the canvas video track, then (after playback starts) we attach an audio track.
-      const combinedStream = new MediaStream(canvasStream.getVideoTracks());
-
-      // Attach audio track AFTER playback starts (more reliable across browsers)
-      try {
-        const ok = await attachAudioTrack(combinedStream);
-        if (!ok) {
-          reject(new Error('Não foi possível capturar o áudio do vídeo'));
-          return;
-        }
-      } catch {}
-
-      if (!mimeType) {
-        reject(new Error('Seu navegador não suporta gravação em WebM.'));
         return;
       }
-
-      // Conservative bitrates reduce encode stalls (which cause stutter) and help A/V sync.
-      recorder = new MediaRecorder(combinedStream, {
-        mimeType,
-        videoBitsPerSecond: settings.maxQuality ? 12000000 : 6000000,
-        audioBitsPerSecond: 160000,
-      });
-
-      bindRecorderHandlers(recorder);
-      recorder.onstop = handleStop;
-      recorder.onerror = handleError;
-
-      // For WebM, using a 1s timeslice reduces memory spikes and helps prevent long stalls.
-      recorder.start(1000);
-
-      // Some browsers will stall MP4 unless data is periodically flushed.
-      // requestData() forces the encoder to emit buffered data and reduces long "freeze" spans.
-      flushTimer = window.setInterval(() => {
-        try {
-          if (recorder && recorder.state === 'recording' && typeof recorder.requestData === 'function') {
-            recorder.requestData();
-          }
-        } catch {
-          // ignore
+      
+      // Validation failed - try fallback if we haven't already
+      if (!retryAttempted) {
+        console.warn(`[VideoProcessor] Validation failed at ${validation.failedAt}, retrying with fallback mode...`);
+        retryAttempted = true;
+        useFallbackMode = true;
+        
+        // Clear chunks for retry
+        chunks.length = 0;
+        
+        // Reset video state for retry
+        video.pause();
+        video.currentTime = 0;
+        await new Promise<void>((res) => {
+          video.onseeked = () => res();
+        });
+        
+        onProgress({
+          videoId,
+          progress: 10,
+          stage: 'processing',
+          message: 'Reprocessando em modo compatível...',
+        });
+        
+        isRecording = true;
+        const retryBlob = await doProcessing();
+        
+        // Validate retry
+        const retryValidation = await validateVideoBlob(retryBlob, 6000);
+        
+        if (retryValidation.valid) {
+          console.log('[VideoProcessor] Retry validation passed');
+          onProgress({
+            videoId,
+            progress: 100,
+            stage: 'done',
+            message: 'Concluído!',
+          });
+          resolve(retryBlob);
+        } else {
+          // Even retry failed, but still return the blob (might still be usable)
+          console.warn('[VideoProcessor] Retry validation also failed, returning blob anyway');
+          onProgress({
+            videoId,
+            progress: 100,
+            stage: 'done',
+            message: 'Concluído (verificar qualidade)',
+          });
+          resolve(retryBlob);
         }
-      }, 1000);
-
-      scheduleFrames();
-    }).catch((err2) => {
-      reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
-    });
+      } else {
+        // Already retried, return original blob
+        console.warn('[VideoProcessor] Already retried, returning original blob');
+        onProgress({
+          videoId,
+          progress: 100,
+          stage: 'done',
+          message: 'Concluído!',
+        });
+        resolve(blob);
+      }
+    } catch (error) {
+      reject(error);
+    }
   });
 }
+
 
 async function loadImage(file: File | Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
