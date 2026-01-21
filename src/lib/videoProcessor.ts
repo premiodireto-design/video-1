@@ -478,8 +478,9 @@ export async function processVideo(
         const finalizeRecording = () => {
           if (stopCompleted) return;
           stopCompleted = true;
-          
-          URL.revokeObjectURL(videoUrl);
+
+          // NOTE: Do NOT revoke videoUrl here.
+          // We may need to retry processing (fallback mode). Cleanup happens once at the end.
           cancelAnimationFrame(animationId);
 
           // Stop AudioContext timer if running
@@ -545,7 +546,6 @@ export async function processVideo(
       };
 
       const handleError = () => {
-        URL.revokeObjectURL(videoUrl);
         cancelAnimationFrame(animationId);
 
         if (flushTimer) {
@@ -663,97 +663,119 @@ export async function processVideo(
   };
 
   // Main processing flow with validation and auto-retry
-  return new Promise<Blob>(async (resolve, reject) => {
-    try {
-      // First attempt
-      const blob = await doProcessing();
-      
-      // Validate the output
-      onProgress({
-        videoId,
-        progress: 98,
-        stage: 'encoding',
-        message: 'Validando arquivo...',
-      });
-      
-      const validation = await validateVideoBlob(blob, 6000);
-      
-      if (validation.valid) {
-        console.log('[VideoProcessor] Video validation passed');
+  // IMPORTANT: Cleanup (revokeObjectURL, video teardown) must happen once after all attempts.
+  let resultBlob: Blob | null = null;
+  try {
+    resultBlob = await new Promise<Blob>(async (resolve, reject) => {
+      try {
+        // First attempt
+        const blob = await doProcessing();
+
+        // Validate the output
         onProgress({
           videoId,
-          progress: 100,
-          stage: 'done',
-          message: 'Concluído!',
+          progress: 98,
+          stage: 'encoding',
+          message: 'Validando arquivo...',
         });
-        resolve(blob);
-        return;
-      }
-      
-      // Validation failed - try fallback if we haven't already
-      if (!retryAttempted) {
-        console.warn(`[VideoProcessor] Validation failed at ${validation.failedAt}, retrying with fallback mode...`);
-        retryAttempted = true;
-        useFallbackMode = true;
-        
-        // Clear chunks for retry
-        chunks.length = 0;
-        
-        // Reset video state for retry
-        video.pause();
-        video.currentTime = 0;
-        await new Promise<void>((res) => {
-          video.onseeked = () => res();
-        });
-        
-        onProgress({
-          videoId,
-          progress: 10,
-          stage: 'processing',
-          message: 'Reprocessando em modo compatível...',
-        });
-        
-        isRecording = true;
-        const retryBlob = await doProcessing();
-        
-        // Validate retry
-        const retryValidation = await validateVideoBlob(retryBlob, 6000);
-        
-        if (retryValidation.valid) {
-          console.log('[VideoProcessor] Retry validation passed');
+
+        const validation = await validateVideoBlob(blob, 6000);
+
+        if (validation.valid) {
+          console.log('[VideoProcessor] Video validation passed');
           onProgress({
             videoId,
             progress: 100,
             stage: 'done',
             message: 'Concluído!',
           });
-          resolve(retryBlob);
+          resolve(blob);
+          return;
+        }
+
+        // Validation failed - try fallback if we haven't already
+        if (!retryAttempted) {
+          console.warn(
+            `[VideoProcessor] Validation failed at ${validation.failedAt}, retrying with fallback mode...`
+          );
+          retryAttempted = true;
+          useFallbackMode = true;
+
+          // Clear chunks for retry
+          chunks.length = 0;
+
+          // Reset video state for retry
+          video.pause();
+          video.currentTime = 0;
+          await new Promise<void>((res) => {
+            // Use event listener so we don't accidentally miss it / overwrite other handlers
+            const onSeeked = () => {
+              video.removeEventListener('seeked', onSeeked);
+              res();
+            };
+            video.addEventListener('seeked', onSeeked);
+          });
+
+          onProgress({
+            videoId,
+            progress: 10,
+            stage: 'processing',
+            message: 'Reprocessando em modo compatível...',
+          });
+
+          const retryBlob = await doProcessing();
+
+          // Validate retry
+          const retryValidation = await validateVideoBlob(retryBlob, 6000);
+
+          if (retryValidation.valid) {
+            console.log('[VideoProcessor] Retry validation passed');
+            onProgress({
+              videoId,
+              progress: 100,
+              stage: 'done',
+              message: 'Concluído!',
+            });
+            resolve(retryBlob);
+          } else {
+            // Even retry failed, but still return the blob (might still be usable)
+            console.warn('[VideoProcessor] Retry validation also failed, returning blob anyway');
+            onProgress({
+              videoId,
+              progress: 100,
+              stage: 'done',
+              message: 'Concluído (verificar qualidade)',
+            });
+            resolve(retryBlob);
+          }
         } else {
-          // Even retry failed, but still return the blob (might still be usable)
-          console.warn('[VideoProcessor] Retry validation also failed, returning blob anyway');
+          // Already retried, return original blob
+          console.warn('[VideoProcessor] Already retried, returning original blob');
           onProgress({
             videoId,
             progress: 100,
             stage: 'done',
-            message: 'Concluído (verificar qualidade)',
+            message: 'Concluído!',
           });
-          resolve(retryBlob);
+          resolve(blob);
         }
-      } else {
-        // Already retried, return original blob
-        console.warn('[VideoProcessor] Already retried, returning original blob');
-        onProgress({
-          videoId,
-          progress: 100,
-          stage: 'done',
-          message: 'Concluído!',
-        });
-        resolve(blob);
+      } catch (error) {
+        reject(error);
       }
-    } catch (error) {
-      reject(error);
-    }
-  });
+    });
+
+    return resultBlob;
+  } finally {
+    // One-time teardown for the video source.
+    try {
+      URL.revokeObjectURL(videoUrl);
+    } catch {}
+    try {
+      video.pause();
+      video.src = '';
+      video.load();
+    } catch {}
+  }
 }
 
 
