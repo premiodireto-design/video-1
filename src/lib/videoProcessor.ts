@@ -705,15 +705,38 @@ export async function processVideo(
           chunks.length = 0;
 
           // Reset video state for retry
+          // IMPORTANT: if currentTime is already 0, 'seeked' may never fire.
           video.pause();
-          video.currentTime = 0;
           await new Promise<void>((res) => {
-            // Use event listener so we don't accidentally miss it / overwrite other handlers
-            const onSeeked = () => {
-              video.removeEventListener('seeked', onSeeked);
+            let settled = false;
+            let onSeeked: (() => void) | null = null;
+            const done = () => {
+              if (settled) return;
+              settled = true;
+              if (onSeeked) video.removeEventListener('seeked', onSeeked);
               res();
             };
+            onSeeked = () => done();
+
             video.addEventListener('seeked', onSeeked);
+
+            try {
+              // Set after listener to avoid missing the event
+              video.currentTime = 0;
+            } catch {
+              // If seeking fails, proceed anyway and let doProcessing() handle it.
+              done();
+              return;
+            }
+
+            // If we're already at 0, resolve immediately
+            if (video.currentTime === 0) {
+              done();
+              return;
+            }
+
+            // Safety timeout to avoid deadlocks
+            window.setTimeout(done, 750);
           });
 
           onProgress({
