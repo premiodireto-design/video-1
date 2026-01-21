@@ -238,11 +238,12 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
       }
 
       // Generate and download zip
+      // For large batches, streaming + no-compression is MUCH more stable and avoids memory spikes.
       toast.info('Gerando arquivo ZIP...');
-      const content = await zip.generateAsync({ 
+      const content = await zip.generateAsync({
         type: 'blob',
-        compression: 'DEFLATE',
-        compressionOptions: { level: 6 },
+        streamFiles: true,
+        compression: 'STORE',
       });
 
       const url = URL.createObjectURL(content);

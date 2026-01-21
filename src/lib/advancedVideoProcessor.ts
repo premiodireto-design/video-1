@@ -481,6 +481,31 @@ export async function processAdvancedVideo(
       canvas.height = templateImg.height;
       const ctx = canvas.getContext('2d')!;
 
+      // Build a template mask once (green pixels become transparent) to avoid drawing template twice per frame.
+      const maskCanvas = document.createElement('canvas');
+      maskCanvas.width = canvas.width;
+      maskCanvas.height = canvas.height;
+      const maskCtx = maskCanvas.getContext('2d')!;
+      maskCtx.drawImage(templateImg, 0, 0, maskCanvas.width, maskCanvas.height);
+
+      try {
+        const img = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+        const px = img.data;
+        const tolerance = 60;
+        for (let i = 0; i < px.length; i += 4) {
+          const r = px[i];
+          const g = px[i + 1];
+          const b = px[i + 2];
+          if (r < tolerance && g > 200 && b < tolerance) {
+            px[i + 3] = 0;
+          }
+        }
+        maskCtx.putImageData(img, 0, 0);
+      } catch (e) {
+        // If getImageData is blocked for any reason, keep the old (slower) approach by falling back to drawing template.
+        console.warn('[AdvancedProcessor] Could not build mask, falling back to template draw:', e);
+      }
+
       // Calculate video positioning
       const { offsetX, offsetY, scale } = calculateSmartPosition(
         video.videoWidth,
@@ -588,43 +613,44 @@ export async function processAdvancedVideo(
       // For MP4, avoid timeslice chunking (can generate broken fragmented MP4)
       recorder.start();
 
+      // Throttle render loop to target FPS to reduce CPU spikes / stalls
+      const frameInterval = 1000 / fps;
+      let lastDraw = performance.now();
+
       const renderFrame = () => {
         if (video.paused || video.ended) {
           recorder.stop();
           return;
         }
 
-        // Clear canvas and draw template
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        // Fill green area with white first (prevents black flash)
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(greenArea.x, greenArea.y, greenArea.width, greenArea.height);
-        
-        // Draw video in green area
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(greenArea.x - 2, greenArea.y - 2, greenArea.width + 4, greenArea.height + 4);
-        ctx.clip();
+        const now = performance.now();
+        if (now - lastDraw < frameInterval) {
+          requestAnimationFrame(renderFrame);
+          return;
+        }
+        lastDraw = now;
 
+        // Clear canvas
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Draw video (clipped to green area)
         const drawX = greenArea.x + offsetX;
         const drawY = greenArea.y + offsetY;
         const drawW = video.videoWidth * scale;
         const drawH = video.videoHeight * scale;
 
-        ctx.drawImage(video, drawX, drawY, drawW, drawH);
-        ctx.restore();
-
-        // Draw template on top (overlay)
-        ctx.drawImage(templateImg, 0, 0);
-        
-        // Redraw video in green area (template has green, this replaces it)
         ctx.save();
         ctx.beginPath();
         ctx.rect(greenArea.x - 2, greenArea.y - 2, greenArea.width + 4, greenArea.height + 4);
         ctx.clip();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(greenArea.x - 2, greenArea.y - 2, greenArea.width + 4, greenArea.height + 4);
         ctx.drawImage(video, drawX, drawY, drawW, drawH);
         ctx.restore();
+
+        // Draw template mask overlay (green becomes transparent)
+        ctx.drawImage(maskCanvas, 0, 0);
 
         // Draw captions if enabled
         if (settings.enableCaptions && captionTranscription.words.length > 0) {

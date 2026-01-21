@@ -1,5 +1,5 @@
 import type { GreenArea } from './greenDetection';
-import { captureVideoFrame, analyzeVideoFrame, calculateSmartPosition, getDefaultAnalysis, type FrameAnalysis } from './frameAnalyzer';
+import { captureVideoFrame, analyzeVideoFrame, calculateSmartPosition, type FrameAnalysis } from './frameAnalyzer';
 
 export interface ProcessingSettings {
   fitMode: 'cover' | 'contain';
@@ -161,14 +161,12 @@ export async function processVideo(
       // Fallback to default cover mode
       scale = Math.max(ww / vw, wh / vh);
       const scaledW = vw * scale;
-      const scaledH = vh * scale;
       offsetX = (ww - scaledW) / 2;
       offsetY = 0; // Top-aligned
     }
   } else if (settings.fitMode === 'cover') {
     scale = Math.max(ww / vw, wh / vh);
     const scaledW = vw * scale;
-    const scaledH = vh * scale;
     offsetX = (ww - scaledW) / 2;
     offsetY = 0; // Top-aligned
   } else {
@@ -205,6 +203,15 @@ export async function processVideo(
     }
   }
   maskCtx.putImageData(maskData, 0, 0);
+
+  // Pre-scale mask to the actual output canvas size once (avoids per-frame scaling work)
+  const maskCanvasScaled = document.createElement('canvas');
+  maskCanvasScaled.width = canvas.width;
+  maskCanvasScaled.height = canvas.height;
+  const maskScaledCtx = maskCanvasScaled.getContext('2d', { alpha: true })!;
+  maskScaledCtx.imageSmoothingEnabled = true;
+  maskScaledCtx.imageSmoothingQuality = 'high';
+  maskScaledCtx.drawImage(maskCanvas, 0, 0, maskCanvasScaled.width, maskCanvasScaled.height);
 
   onProgress({
     videoId,
@@ -297,38 +304,35 @@ export async function processVideo(
   let isRecording = true;
   const endTime = duration - trimEnd;
 
-  const renderFrame = () => {
-    // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
-    ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+  // Precompute scaled geometry to avoid transforms every frame
+  const sx = x * renderScale;
+  const sy = y * renderScale;
+  const sww = ww * renderScale;
+  const swh = wh * renderScale;
+  const sOffsetX = offsetX * renderScale;
+  const sOffsetY = offsetY * renderScale;
+  const sScaledW = scaledW * renderScale;
+  const sScaledH = scaledH * renderScale;
 
+  const renderFrame = () => {
     // Clear entire canvas with white background first
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, 1080, 1920);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw video FIRST (before template) to ensure it's behind
-    // Use clipping to constrain video to the green area bounds
+    // Draw video (clipped to the green area)
     ctx.save();
     ctx.beginPath();
-    // Slightly expand clip area to ensure full coverage with no gaps
-    ctx.rect(x - 2, y - 2, ww + 4, wh + 4);
+    ctx.rect(sx - 2, sy - 2, sww + 4, swh + 4);
     ctx.clip();
-    
-    // Fill clip area with white to ensure no green shows through
+
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(x - 2, y - 2, ww + 4, wh + 4);
-    
-    // Draw video
-    ctx.drawImage(
-      video, 
-      x + offsetX, 
-      y + offsetY, 
-      scaledW, 
-      scaledH
-    );
+    ctx.fillRect(sx - 2, sy - 2, sww + 4, swh + 4);
+
+    ctx.drawImage(video, sx + sOffsetX, sy + sOffsetY, sScaledW, sScaledH);
     ctx.restore();
 
-    // Draw template mask on top (this has transparent where green was)
-    ctx.drawImage(maskCanvas, 0, 0);
+    // Draw template mask on top (already scaled)
+    ctx.drawImage(maskCanvasScaled, 0, 0);
 
     // Draw watermark if provided
     if (settings.watermark && settings.watermark.trim()) {
@@ -372,30 +376,34 @@ export async function processVideo(
     }, 300);
   };
 
-  // Use requestVideoFrameCallback for precise frame sync when available
-  // Falls back to requestAnimationFrame for older browsers
+  // Frame scheduling: throttle to a stable FPS to avoid CPU spikes that can cause MP4 encoder stalls.
   const scheduleFrames = () => {
     const anyVideo = video as any;
-    
+    const targetFps = 30;
+    const frameInterval = 1000 / targetFps;
+    let lastDraw = performance.now();
+
     const onFrame = () => {
       if (!isRecording) return;
-      
+
       if (video.currentTime >= endTime || video.ended || video.paused) {
         stopRecording();
         return;
       }
-      
-      renderFrame();
-      
-      // Schedule next frame using the best available method
+
+      const now = performance.now();
+      if (now - lastDraw >= frameInterval) {
+        lastDraw = now;
+        renderFrame();
+      }
+
       if (typeof anyVideo.requestVideoFrameCallback === 'function') {
         anyVideo.requestVideoFrameCallback(onFrame);
       } else {
         animationId = requestAnimationFrame(onFrame);
       }
     };
-    
-    // Start the frame loop
+
     if (typeof anyVideo.requestVideoFrameCallback === 'function') {
       anyVideo.requestVideoFrameCallback(onFrame);
     } else {
