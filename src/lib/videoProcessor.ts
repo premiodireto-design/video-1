@@ -384,37 +384,74 @@ export async function processVideo(
     }, 300);
   };
 
-  // Frame scheduling: keep cadence stable to avoid CPU spikes/encoder stalls.
+  // Frame scheduling: Use a precise AudioContext-based timer for consistent frame cadence.
+  // This is more reliable than requestAnimationFrame for MediaRecorder, as it won't be
+  // throttled when the tab is in the background or during heavy rendering.
+  let frameTimerId: number | null = null;
+  let audioTimerContext: AudioContext | null = null;
+
   const scheduleFrames = () => {
-    const anyVideo = video as any;
     const frameInterval = 1000 / targetFps;
-    let lastDraw = performance.now();
 
-    const onFrame = () => {
-      if (!isRecording) return;
+    // Use AudioContext oscillator-based timing for more consistent frame pacing.
+    // This technique is less susceptible to browser throttling than rAF.
+    try {
+      audioTimerContext = new AudioContext();
+      const silence = audioTimerContext.createGain();
+      silence.gain.value = 0;
+      silence.connect(audioTimerContext.destination);
 
-      if (video.currentTime >= endTime || video.ended || video.paused) {
-        stopRecording();
-        return;
-      }
+      let stopped = false;
 
-      const now = performance.now();
-      if (now - lastDraw >= frameInterval) {
-        lastDraw = now;
+      const tick = () => {
+        if (stopped || !isRecording) return;
+
+        if (video.currentTime >= endTime || video.ended || video.paused) {
+          stopped = true;
+          stopRecording();
+          return;
+        }
+
         renderFrame();
-      }
 
-      if (typeof anyVideo.requestVideoFrameCallback === 'function') {
-        anyVideo.requestVideoFrameCallback(onFrame);
-      } else {
-        animationId = requestAnimationFrame(onFrame);
-      }
-    };
+        // Schedule next tick using oscillator end event (precise timing)
+        const osc = audioTimerContext!.createOscillator();
+        osc.connect(silence);
+        osc.onended = tick;
+        osc.start(0);
+        osc.stop(audioTimerContext!.currentTime + frameInterval / 1000);
+      };
 
-    if (typeof anyVideo.requestVideoFrameCallback === 'function') {
-      anyVideo.requestVideoFrameCallback(onFrame);
-    } else {
-      animationId = requestAnimationFrame(onFrame);
+      // Start first tick
+      tick();
+
+      // Cleanup helper
+      const stopTimer = () => {
+        stopped = true;
+        try {
+          audioTimerContext?.close();
+        } catch {}
+      };
+
+      // Store for cleanup
+      (window as any).__videoProcessorStopTimer = stopTimer;
+    } catch (e) {
+      // Fallback to setInterval if AudioContext fails
+      console.warn('[VideoProcessor] AudioContext timer failed, using setInterval fallback');
+      frameTimerId = window.setInterval(() => {
+        if (!isRecording) {
+          if (frameTimerId) window.clearInterval(frameTimerId);
+          return;
+        }
+
+        if (video.currentTime >= endTime || video.ended || video.paused) {
+          if (frameTimerId) window.clearInterval(frameTimerId);
+          stopRecording();
+          return;
+        }
+
+        renderFrame();
+      }, frameInterval);
     }
   };
 
@@ -422,6 +459,11 @@ export async function processVideo(
     const handleStop = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
+
+      // Stop AudioContext timer if running
+      try {
+        (window as any).__videoProcessorStopTimer?.();
+      } catch {}
 
       if (flushTimer) {
         window.clearInterval(flushTimer);

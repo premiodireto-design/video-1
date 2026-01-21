@@ -631,22 +631,21 @@ export async function processAdvancedVideo(
       // For MP4, avoid timeslice chunking (can generate broken fragmented MP4)
       recorder.start();
 
-      // Throttle render loop to target FPS to reduce CPU spikes / stalls
+      // Use AudioContext-based timer for consistent frame pacing (more reliable than rAF).
+      // This prevents stuttering caused by browser throttling or main thread blocking.
       const frameInterval = 1000 / fps;
-      let lastDraw = performance.now();
+      let timerCtx: AudioContext | null = null;
+      let timerStopped = false;
 
-      const renderFrame = () => {
+      const drawFrame = () => {
+        if (timerStopped) return;
+
         if (video.paused || video.ended) {
+          timerStopped = true;
           recorder.stop();
+          try { timerCtx?.close(); } catch {}
           return;
         }
-
-        const now = performance.now();
-        if (now - lastDraw < frameInterval) {
-          requestAnimationFrame(renderFrame);
-          return;
-        }
-        lastDraw = now;
 
         // Clear canvas
         ctx.fillStyle = '#FFFFFF';
@@ -691,11 +690,39 @@ export async function processAdvancedVideo(
           lastProgressValue = progress;
           onProgress({ videoId, progress, stage: 'rendering', message: `Renderizando... ${Math.round(video.currentTime)}s/${Math.round(duration)}s` });
         }
-
-        requestAnimationFrame(renderFrame);
       };
 
-      renderFrame();
+      // Start AudioContext-based timer loop
+      try {
+        timerCtx = new AudioContext();
+        const silence = timerCtx.createGain();
+        silence.gain.value = 0;
+        silence.connect(timerCtx.destination);
+
+        const tick = () => {
+          if (timerStopped) return;
+          drawFrame();
+
+          // Schedule next tick using oscillator end event
+          const osc = timerCtx!.createOscillator();
+          osc.connect(silence);
+          osc.onended = tick;
+          osc.start(0);
+          osc.stop(timerCtx!.currentTime + frameInterval / 1000);
+        };
+
+        tick();
+      } catch (e) {
+        // Fallback to setInterval if AudioContext fails
+        console.warn('[AdvancedProcessor] AudioContext timer failed, using setInterval fallback');
+        const intervalId = window.setInterval(() => {
+          if (timerStopped) {
+            window.clearInterval(intervalId);
+            return;
+          }
+          drawFrame();
+        }, frameInterval);
+      }
     } catch (error) {
       if (audioContext) {
         audioContext.close();
