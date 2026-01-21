@@ -64,16 +64,69 @@ export async function trimStartWithFFmpeg(
 
     if (progressHandler) ff.on('progress', progressHandler);
 
-    // Re-encode to ensure the cut is clean even when the first keyframe is > 0s.
-    // - MP4: H.264/AAC (same as our converter defaults)
-    // - WebM: VP8/Opus (fast + widely supported)
-    const cmd =
+    // Re-encode and reset timestamps so the output starts at t=0.
+    // IMPORTANT: many “first second freeze” issues are actually timestamp/PTS problems.
+    // We prefer accurate seeking by placing `-ss` AFTER `-i`.
+    const baseFilters = ['-vf', 'setpts=PTS-STARTPTS', '-af', 'asetpts=PTS-STARTPTS'];
+    const baseTsFix = ['-avoid_negative_ts', 'make_zero', '-reset_timestamps', '1', '-fflags', '+genpts'];
+
+    const buildCmdAccurate = () =>
+      ext === 'mp4'
+        ? [
+            '-i',
+            inputName,
+            '-ss',
+            `${trimSeconds}`,
+            ...baseFilters,
+            ...baseTsFix,
+            '-c:v',
+            'libx264',
+            '-preset',
+            'ultrafast',
+            '-crf',
+            '23',
+            '-pix_fmt',
+            'yuv420p',
+            '-c:a',
+            'aac',
+            '-b:a',
+            '128k',
+            '-movflags',
+            '+faststart',
+            '-y',
+            outputName,
+          ]
+        : [
+            '-i',
+            inputName,
+            '-ss',
+            `${trimSeconds}`,
+            ...baseFilters,
+            ...baseTsFix,
+            '-c:v',
+            'libvpx',
+            '-b:v',
+            '3M',
+            '-crf',
+            '10',
+            '-c:a',
+            'libopus',
+            '-b:a',
+            '128k',
+            '-y',
+            outputName,
+          ];
+
+    // Fallback: faster seeking by placing `-ss` BEFORE `-i` (less accurate but can be more reliable on some inputs).
+    const buildCmdFastSeek = () =>
       ext === 'mp4'
         ? [
             '-ss',
             `${trimSeconds}`,
             '-i',
             inputName,
+            ...baseFilters,
+            ...baseTsFix,
             '-c:v',
             'libx264',
             '-preset',
@@ -96,6 +149,8 @@ export async function trimStartWithFFmpeg(
             `${trimSeconds}`,
             '-i',
             inputName,
+            ...baseFilters,
+            ...baseTsFix,
             '-c:v',
             'libvpx',
             '-b:v',
@@ -110,7 +165,18 @@ export async function trimStartWithFFmpeg(
             outputName,
           ];
 
-    await ff.exec(cmd);
+    console.log('[VideoTrim] Trimming start with FFmpeg:', { ext, trimSeconds });
+
+    try {
+      await ff.exec(buildCmdAccurate());
+    } catch (e) {
+      console.warn('[VideoTrim] Accurate seek trim failed; retrying with fast seek...', e);
+      // Best-effort cleanup before retry
+      try {
+        await ff.deleteFile(outputName);
+      } catch {}
+      await ff.exec(buildCmdFastSeek());
+    }
 
     const data = await ff.readFile(outputName);
     const bytes = data instanceof Uint8Array ? new Uint8Array(data) : new TextEncoder().encode(data as string);
