@@ -1,5 +1,6 @@
 import type { GreenArea } from './greenDetection';
 import { captureVideoFrame, analyzeVideoFrame, calculateSmartPosition, getDefaultAnalysis, type FrameAnalysis } from './frameAnalyzer';
+import { trimStartWithFFmpeg } from './videoTrim';
 
 export interface ProcessingSettings {
   fitMode: 'cover' | 'contain';
@@ -397,7 +398,7 @@ export async function processVideo(
         audioContext?.close();
       } catch {}
 
-      setTimeout(() => {
+      setTimeout(async () => {
         if (chunks.length === 0) {
           reject(new Error('Nenhum dado de vídeo foi capturado'));
           return;
@@ -410,14 +411,47 @@ export async function processVideo(
           return;
         }
 
-        onProgress({
-          videoId,
-          progress: 100,
-          stage: 'done',
-          message: 'Concluído!',
-        });
+        try {
+          onProgress({
+            videoId,
+            progress: 96,
+            stage: 'encoding',
+            message: 'Aplicando correção (cortando 1s inicial)...',
+          });
 
-        resolve(blob);
+          const trimmed = await trimStartWithFFmpeg(blob, {
+            trimSeconds: 1,
+            onProgress: (p) => {
+              // keep it near the end so we don't regress UI behavior
+              const mapped = 96 + Math.round((p / 100) * 3);
+              onProgress({
+                videoId,
+                progress: Math.min(99, mapped),
+                stage: 'encoding',
+                message: 'Cortando 1s inicial...',
+              });
+            },
+          });
+
+          onProgress({
+            videoId,
+            progress: 100,
+            stage: 'done',
+            message: 'Concluído!',
+          });
+
+          resolve(trimmed);
+        } catch (e) {
+          // If trimming fails, return the original blob so the user can still download.
+          console.warn('[VideoProcessor] Trim fallback (returning original output):', e);
+          onProgress({
+            videoId,
+            progress: 100,
+            stage: 'done',
+            message: 'Concluído!',
+          });
+          resolve(blob);
+        }
       }, 200);
     };
 
