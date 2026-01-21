@@ -86,12 +86,12 @@ export async function processVideo(
   });
 
   const duration = video.duration;
-  const trimStart = 0.5; // Cortar 0.5s do início
-  const trimEnd = 0.5; // Cortar 0.5s do final
+  const trimStart = 0; // Sem corte no início para evitar travada
+  const trimEnd = 0.3; // Cortar apenas 0.3s do final
   const effectiveDuration = Math.max(0.5, duration - trimStart - trimEnd);
   
-  // Set video to start after trim
-  video.currentTime = trimStart;
+  // Set video to start from the beginning (no trim at start)
+  video.currentTime = 0;
   
   await new Promise<void>((res) => {
     video.onseeked = () => res();
@@ -298,16 +298,18 @@ export async function processVideo(
     // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
 
-    // Clear with black
-    ctx.fillStyle = '#000000';
+    // Clear with white background (to match template background and remove any borders)
+    ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, 1080, 1920);
 
-    // Draw video in the green area position with clipping
-    // Use a slightly larger clip area (2px margin) to ensure no green edge pixels are visible
-    const margin = 2;
+    // Fill the green area with white first to ensure no artifacts
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(x, y, ww, wh);
+
+    // Draw video in the green area position with exact clipping (no margin = no visible border)
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x + margin, y + margin, ww - margin * 2, wh - margin * 2);
+    ctx.rect(x, y, ww, wh);
     ctx.clip();
     ctx.drawImage(video, x + offsetX, y + offsetY, scaledW, scaledH);
     ctx.restore();
