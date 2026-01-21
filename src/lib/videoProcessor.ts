@@ -221,8 +221,9 @@ export async function processVideo(
   });
 
   // Set up MediaRecorder (video from canvas + audio from the source video)
-  // Use a fixed FPS stream to reduce stutter and keep audio in sync.
-  const canvasStream = canvas.captureStream(30);
+  // IMPORTANT: keep capture FPS aligned with our render cadence.
+  const targetFps = settings.maxQuality ? 60 : 30;
+  const canvasStream = canvas.captureStream(targetFps);
 
   // We start with the canvas video track, then (after playback starts) we attach an audio track.
   const combinedStream = new MediaStream(canvasStream.getVideoTracks());
@@ -305,6 +306,10 @@ export async function processVideo(
   let isRecording = true;
   const endTime = duration - trimEnd;
 
+  // Progress throttling is CRITICAL for smooth output.
+  // React state updates during recording can block the main thread and cause frame freezes.
+  let lastProgressBucket = -1;
+
   // Precompute scaled geometry to avoid transforms every frame
   const sx = x * renderScale;
   const sy = y * renderScale;
@@ -353,13 +358,15 @@ export async function processVideo(
     // Update progress (less frequently to reduce overhead)
     const currentProgress = video.currentTime - trimStart;
     const progressPercent = Math.round((currentProgress / effectiveDuration) * 100);
-    if (progressPercent % 5 === 0) { // Only update every 5%
+    const bucket = Math.floor(progressPercent / 5) * 5;
+    if (bucket !== lastProgressBucket) {
+      lastProgressBucket = bucket;
       const progress = 20 + (currentProgress / effectiveDuration) * 75;
       onProgress({
         videoId,
         progress: Math.min(95, Math.round(progress)),
         stage: 'encoding',
-        message: `Processando: ${progressPercent}%`,
+        message: `Processando: ${bucket}%`,
       });
     }
   };
@@ -377,10 +384,9 @@ export async function processVideo(
     }, 300);
   };
 
-  // Frame scheduling: throttle to a stable FPS to avoid CPU spikes that can cause MP4 encoder stalls.
+  // Frame scheduling: keep cadence stable to avoid CPU spikes/encoder stalls.
   const scheduleFrames = () => {
     const anyVideo = video as any;
-    const targetFps = 30;
     const frameInterval = 1000 / targetFps;
     let lastDraw = performance.now();
 

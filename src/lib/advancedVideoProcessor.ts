@@ -520,6 +520,10 @@ export async function processAdvancedVideo(
       const bitrate = settings.maxQuality ? 12000000 : 6000000;
       
       const stream = canvas.captureStream(fps);
+
+      // Progress throttling: frequent UI updates during recording can freeze frames.
+      let lastProgressAt = 0;
+      let lastProgressValue = -1;
       
       // Setup audio context and add audio track
       audioContext = new AudioContext();
@@ -573,6 +577,17 @@ export async function processAdvancedVideo(
         audioBitsPerSecond: 160000,
       });
 
+      // Periodically flush encoder buffers to reduce long stalls/frozen spans.
+      const flushTimer = window.setInterval(() => {
+        try {
+          if (recorder.state === 'recording' && typeof (recorder as any).requestData === 'function') {
+            (recorder as any).requestData();
+          }
+        } catch {
+          // ignore
+        }
+      }, 1000);
+
       const chunks: Blob[] = [];
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
@@ -581,6 +596,8 @@ export async function processAdvancedVideo(
       recorder.onstop = () => {
         URL.revokeObjectURL(templateUrl);
         URL.revokeObjectURL(videoUrl);
+
+        window.clearInterval(flushTimer);
         
         if (audioContext) {
           audioContext.close();
@@ -592,6 +609,7 @@ export async function processAdvancedVideo(
       };
 
       recorder.onerror = (e) => {
+        window.clearInterval(flushTimer);
         reject(new Error('Recording failed'));
       };
 
@@ -665,9 +683,14 @@ export async function processAdvancedVideo(
           ctx.fillText(settings.watermark, canvas.width - 20, canvas.height - 20);
         }
 
-        // Update progress
-        const progress = 25 + (video.currentTime / duration) * 70;
-        onProgress({ videoId, progress, stage: 'rendering', message: `Renderizando... ${Math.round(video.currentTime)}s/${Math.round(duration)}s` });
+        // Update progress (throttled) — prevents UI re-renders from causing frame drops.
+        const nowP = performance.now();
+        const progress = Math.round(25 + (video.currentTime / duration) * 70);
+        if ((nowP - lastProgressAt) > 250 && progress !== lastProgressValue) {
+          lastProgressAt = nowP;
+          lastProgressValue = progress;
+          onProgress({ videoId, progress, stage: 'rendering', message: `Renderizando... ${Math.round(video.currentTime)}s/${Math.round(duration)}s` });
+        }
 
         requestAnimationFrame(renderFrame);
       };
