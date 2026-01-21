@@ -35,6 +35,17 @@ export default function Dashboard() {
   const [conversionProgress, setConversionProgress] = useState<{ current: number; total: number; filename: string; mode: 'mp4' | 'webm' | 'init' }>({ current: 0, total: 0, filename: '', mode: 'init' });
   const { toast } = useToast();
 
+  const downloadZipBlob = useCallback((zipBlob: Blob, filename: string) => {
+    const url = URL.createObjectURL(zipBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, []);
+
   const canProcess = templateFile !== null && greenArea !== null && videos.length > 0;
 
   const overallProgress = videos.length > 0
@@ -292,6 +303,9 @@ export default function Dashboard() {
           const fallback = `${base}_canva_${String(i + 1).padStart(3, '0')}.webm`;
           zip.file(fallback, video.outputBlob);
         }
+
+        // Yield to the UI thread to reduce stalls when bundling many files
+        await new Promise<void>((r) => setTimeout(r, 0));
       }
 
       toast({
@@ -300,19 +314,33 @@ export default function Dashboard() {
       });
 
       // For large batches, streaming + no-compression is MUCH more stable and avoids memory spikes.
-      const zipBlob = await zip.generateAsync({
-        type: 'blob',
-        streamFiles: true,
-        compression: 'STORE',
-      });
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'videos_processados_mp4.zip';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      let zipBlob: Blob;
+      try {
+        zipBlob = await zip.generateAsync({
+          type: 'blob',
+          streamFiles: true,
+          compression: 'STORE',
+        });
+        downloadZipBlob(zipBlob, 'videos_processados_mp4.zip');
+      } catch (zipErr) {
+        // Fallback: if the browser runs out of memory, split into two ZIPs (still MP4/WebM as added above)
+        console.error('ZIP generation failed (MP4). Falling back to split ZIPs:', zipErr);
+        const chunkSize = 25;
+        for (let part = 0; part < Math.ceil(completedVideos.length / chunkSize); part++) {
+          const chunk = completedVideos.slice(part * chunkSize, (part + 1) * chunkSize);
+          const partZip = new JSZip();
+          for (let i = 0; i < chunk.length; i++) {
+            const v = chunk[i];
+            if (!v.outputBlob) continue;
+            const base = v.name.replace(/\.[^/.]+$/, '');
+            const filename = `${base}_canva_${String(part * chunkSize + i + 1).padStart(3, '0')}.${v.outputBlob.type.includes('mp4') ? 'mp4' : 'webm'}`;
+            partZip.file(filename, v.outputBlob);
+          }
+          const partBlob = await partZip.generateAsync({ type: 'blob', streamFiles: true, compression: 'STORE' });
+          downloadZipBlob(partBlob, `videos_processados_mp4_parte_${part + 1}.zip`);
+          await new Promise<void>((r) => setTimeout(r, 300));
+        }
+      }
 
       toast({
         title: 'Download concluído!',
@@ -333,7 +361,7 @@ export default function Dashboard() {
       setIsConverting(false);
       setConversionProgress({ current: 0, total: 0, filename: '', mode: 'init' });
     }
-  }, [videos, toast]);
+  }, [videos, toast, downloadZipBlob]);
 
   const handleDownloadAllWebm = useCallback(async () => {
     const completedVideos = videos.filter(v => v.status === 'completed' && v.outputBlob);
@@ -367,21 +395,34 @@ export default function Dashboard() {
 
         const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(i + 1).padStart(3, '0')}.webm`;
         zip.file(filename, video.outputBlob);
+
+        await new Promise<void>((r) => setTimeout(r, 0));
       }
 
-      const zipBlob = await zip.generateAsync({
-        type: 'blob',
-        streamFiles: true,
-        compression: 'STORE',
-      });
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'videos_processados_webm.zip';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      try {
+        const zipBlob = await zip.generateAsync({
+          type: 'blob',
+          streamFiles: true,
+          compression: 'STORE',
+        });
+        downloadZipBlob(zipBlob, 'videos_processados_webm.zip');
+      } catch (zipErr) {
+        console.error('ZIP generation failed (WebM). Falling back to split ZIPs:', zipErr);
+        const chunkSize = 25;
+        for (let part = 0; part < Math.ceil(completedVideos.length / chunkSize); part++) {
+          const chunk = completedVideos.slice(part * chunkSize, (part + 1) * chunkSize);
+          const partZip = new JSZip();
+          for (let i = 0; i < chunk.length; i++) {
+            const v = chunk[i];
+            if (!v.outputBlob) continue;
+            const filename = v.name.replace(/\.[^/.]+$/, '') + `_canva_${String(part * chunkSize + i + 1).padStart(3, '0')}.webm`;
+            partZip.file(filename, v.outputBlob);
+          }
+          const partBlob = await partZip.generateAsync({ type: 'blob', streamFiles: true, compression: 'STORE' });
+          downloadZipBlob(partBlob, `videos_processados_webm_parte_${part + 1}.zip`);
+          await new Promise<void>((r) => setTimeout(r, 300));
+        }
+      }
 
       toast({
         title: 'Download concluído!',
@@ -402,7 +443,7 @@ export default function Dashboard() {
       setIsConverting(false);
       setConversionProgress({ current: 0, total: 0, filename: '', mode: 'init' });
     }
-  }, [videos, toast]);
+  }, [videos, toast, downloadZipBlob]);
 
   return (
     <div className="min-h-screen bg-background">
