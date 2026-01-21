@@ -489,23 +489,12 @@ export async function processVideo(
         await attachAudioTrack();
       } catch {}
 
-      // Warmup: render a bit BEFORE starting MediaRecorder.
-      // This avoids capturing encoder/video warmup stalls as the first second of the file.
-      // (Even if we also trim later, this improves stability a lot.)
-      const warmupMs = 1000;
+      // Start recording immediately - the stutter in the first second will be
+      // removed by FFmpeg post-processing (trimStartWithFFmpeg).
+      // We removed the warmup delay because it was causing frames to be lost
+      // (scheduleFrames was running but recorder wasn't capturing).
+      recorder.start(100);
       scheduleFrames();
-
-      window.setTimeout(() => {
-        if (!isRecording) return;
-        if (recorder.state === 'inactive') {
-          try {
-            recorder.start(100);
-          } catch (e) {
-            console.error('[VideoProcessor] Failed to start recorder after warmup:', e);
-            reject(new Error('Falha ao iniciar gravação do vídeo'));
-          }
-        }
-      }, warmupMs);
     }).catch((err2) => {
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
     });
