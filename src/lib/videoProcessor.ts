@@ -389,71 +389,64 @@ export async function processVideo(
   // This is more reliable than requestAnimationFrame for MediaRecorder, as it won't be
   // throttled when the tab is in the background or during heavy rendering.
   let frameTimerId: number | null = null;
-  let audioTimerContext: AudioContext | null = null;
+  let stopped = false;
 
   const scheduleFrames = () => {
     const frameInterval = 1000 / targetFps;
+    let lastDrawAt = 0;
 
-    // Use AudioContext oscillator-based timing for more consistent frame pacing.
-    // This technique is less susceptible to browser throttling than rAF.
-    try {
-      audioTimerContext = new AudioContext();
-      const silence = audioTimerContext.createGain();
-      silence.gain.value = 0;
-      silence.connect(audioTimerContext.destination);
+    const stopTimer = () => {
+      stopped = true;
+      if (frameTimerId) {
+        window.clearInterval(frameTimerId);
+        frameTimerId = null;
+      }
+    };
 
-      let stopped = false;
+    // Store for cleanup
+    (window as any).__videoProcessorStopTimer = stopTimer;
 
-      const tick = () => {
-        if (stopped || !isRecording) return;
+    const tick = (now: number) => {
+      if (stopped || !isRecording) return;
 
-        if (video.currentTime >= endTime || video.ended || video.paused) {
-          stopped = true;
-          stopRecording();
-          return;
-        }
+      if (video.currentTime >= endTime || video.ended || video.paused) {
+        stopTimer();
+        stopRecording();
+        return;
+      }
 
+      // Throttle to targetFps even if the callback rate is higher.
+      if (now - lastDrawAt >= frameInterval - 0.5) {
+        lastDrawAt = now;
         renderFrame();
+      }
 
-        // Schedule next tick using oscillator end event (precise timing)
-        const osc = audioTimerContext!.createOscillator();
-        osc.connect(silence);
-        osc.onended = tick;
-        osc.start(0);
-        osc.stop(audioTimerContext!.currentTime + frameInterval / 1000);
-      };
+      const rVFC = (video as any).requestVideoFrameCallback as
+        | ((cb: (now: number, meta: any) => void) => number)
+        | undefined;
 
-      // Start first tick
-      tick();
+      if (typeof rVFC === 'function') {
+        rVFC((n: number) => tick(n));
+      }
+    };
 
-      // Cleanup helper
-      const stopTimer = () => {
-        stopped = true;
-        try {
-          audioTimerContext?.close();
-        } catch {}
-      };
+    const rVFC = (video as any).requestVideoFrameCallback as
+      | ((cb: (now: number, meta: any) => void) => number)
+      | undefined;
 
-      // Store for cleanup
-      (window as any).__videoProcessorStopTimer = stopTimer;
-    } catch (e) {
-      // Fallback to setInterval if AudioContext fails
-      console.warn('[VideoProcessor] AudioContext timer failed, using setInterval fallback');
-      frameTimerId = window.setInterval(() => {
-        if (!isRecording) {
-          if (frameTimerId) window.clearInterval(frameTimerId);
-          return;
-        }
-
-        if (video.currentTime >= endTime || video.ended || video.paused) {
-          if (frameTimerId) window.clearInterval(frameTimerId);
-          stopRecording();
-          return;
-        }
-
-        renderFrame();
-      }, frameInterval);
+    if (typeof rVFC === 'function') {
+      rVFC((n: number) => tick(n));
+      return;
     }
+
+    // Fallback: setInterval (less ideal, but avoids per-frame AudioContext allocations).
+    frameTimerId = window.setInterval(() => {
+      if (stopped || !isRecording) {
+        stopTimer();
+        return;
+      }
+      tick(performance.now());
+    }, frameInterval);
   };
 
   return new Promise<Blob>((resolve, reject) => {

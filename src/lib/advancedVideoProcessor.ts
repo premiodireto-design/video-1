@@ -645,22 +645,28 @@ export async function processAdvancedVideo(
       // For MP4, avoid timeslice chunking (can generate broken fragmented MP4)
       recorder.start();
 
-      // Use AudioContext-based timer for consistent frame pacing (more reliable than rAF).
-      // This prevents stuttering caused by browser throttling or main thread blocking.
-      const frameInterval = 1000 / fps;
-      let timerCtx: AudioContext | null = null;
-      let timerStopped = false;
+       // Frame pacing: prefer requestVideoFrameCallback in Chrome.
+       // The previous AudioContext-oscillator timer allocated an oscillator every frame,
+       // which can trigger GC pauses and *cause* mid-video stutters.
+       const frameInterval = 1000 / fps;
+       let timerStopped = false;
+       let lastDrawAt = 0;
 
-      const drawFrame = () => {
-        if (timerStopped) return;
+       const drawFrame = (now: number) => {
+         if (timerStopped) return;
 
-        // Stop slightly before the end (trimming) to avoid end-of-file decoder stalls
+         // Stop slightly before the end (trimming) to avoid end-of-file decoder stalls
          if (video.currentTime >= Math.max(0, duration - trimEndSeconds) || video.paused || video.ended) {
-          timerStopped = true;
+           timerStopped = true;
            recorder?.stop();
-          try { timerCtx?.close(); } catch {}
-          return;
-        }
+           return;
+         }
+
+         // Throttle to fps (even if rVFC is higher).
+         if (now - lastDrawAt < frameInterval - 0.5) {
+           return;
+         }
+         lastDrawAt = now;
 
         // Clear canvas
         ctx.fillStyle = '#FFFFFF';
@@ -708,37 +714,34 @@ export async function processAdvancedVideo(
         }
       };
 
-      // Start AudioContext-based timer loop
-      try {
-        timerCtx = new AudioContext();
-        const silence = timerCtx.createGain();
-        silence.gain.value = 0;
-        silence.connect(timerCtx.destination);
+       const rVFC = (video as any).requestVideoFrameCallback as
+         | ((cb: (now: number, meta: any) => void) => number)
+         | undefined;
 
-        const tick = () => {
-          if (timerStopped) return;
-          drawFrame();
-
-          // Schedule next tick using oscillator end event
-          const osc = timerCtx!.createOscillator();
-          osc.connect(silence);
-          osc.onended = tick;
-          osc.start(0);
-          osc.stop(timerCtx!.currentTime + frameInterval / 1000);
-        };
-
-        tick();
-      } catch (e) {
-        // Fallback to setInterval if AudioContext fails
-        console.warn('[AdvancedProcessor] AudioContext timer failed, using setInterval fallback');
-        const intervalId = window.setInterval(() => {
-          if (timerStopped) {
-            window.clearInterval(intervalId);
-            return;
-          }
-          drawFrame();
-        }, frameInterval);
-      }
+       if (typeof rVFC === 'function') {
+         const tick = (now: number) => {
+           if (timerStopped) return;
+           drawFrame(now);
+           if (!timerStopped) {
+             try {
+               rVFC(tick);
+             } catch {
+               timerStopped = true;
+               recorder?.stop();
+             }
+           }
+         };
+         rVFC(tick);
+       } else {
+         // Fallback to setInterval
+         const intervalId = window.setInterval(() => {
+           if (timerStopped) {
+             window.clearInterval(intervalId);
+             return;
+           }
+           drawFrame(performance.now());
+         }, frameInterval);
+       }
     } catch (error) {
       if (audioContext) {
         audioContext.close();
