@@ -14,11 +14,9 @@ export async function estimateVideoFps(
   const sampleFrames = opts.sampleFrames ?? 20;
   const timeoutMs = opts.timeoutMs ?? 900;
 
-  const rVFC = (video as any).requestVideoFrameCallback as
-    | ((cb: (now: number, meta: any) => void) => number)
-    | undefined;
-
-  if (typeof rVFC !== 'function') return null;
+  // Check if requestVideoFrameCallback is supported
+  const rVFCMethod = (video as any).requestVideoFrameCallback;
+  if (typeof rVFCMethod !== 'function') return null;
   if (video.paused || video.ended) return null;
 
   return new Promise<number | null>((resolve) => {
@@ -27,10 +25,12 @@ export async function estimateVideoFps(
     let frames = 0;
     const start = performance.now();
     let resolved = false;
+    let timeoutId: number | null = null;
 
     const finish = () => {
       if (resolved) return;
       resolved = true;
+      if (timeoutId) window.clearTimeout(timeoutId);
       if (deltas.length < 5) {
         resolve(null);
         return;
@@ -54,23 +54,25 @@ export async function estimateVideoFps(
       lastNow = now;
       frames += 1;
 
-      if (frames >= sampleFrames || now - start >= timeoutMs) {
+      if (frames >= sampleFrames || performance.now() - start >= timeoutMs) {
         finish();
         return;
       }
 
       try {
-        rVFC(tick);
+        // IMPORTANT: Call with correct 'this' context to avoid "Illegal invocation"
+        rVFCMethod.call(video, tick);
       } catch {
         finish();
       }
     };
 
-    const timeoutId = window.setTimeout(() => finish(), timeoutMs + 200);
+    timeoutId = window.setTimeout(() => finish(), timeoutMs + 200);
     try {
-      rVFC(tick);
+      // IMPORTANT: Call with correct 'this' context to avoid "Illegal invocation"
+      rVFCMethod.call(video, tick);
     } catch {
-      window.clearTimeout(timeoutId);
+      if (timeoutId) window.clearTimeout(timeoutId);
       resolve(null);
     }
   });

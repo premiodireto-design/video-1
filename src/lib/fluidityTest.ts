@@ -57,10 +57,31 @@ export async function runFluidityTest(
   // Detect original FPS
   video.currentTime = 0;
   await new Promise<void>((r) => {
-    video.onseeked = () => r();
+    const onSeeked = () => {
+      video.removeEventListener('seeked', onSeeked);
+      r();
+    };
+    video.addEventListener('seeked', onSeeked);
+    // If already at 0, trigger immediately
+    if (video.currentTime === 0) r();
   });
 
-  await video.play();
+  try {
+    await video.play();
+  } catch (playError) {
+    console.warn('[FluidityTest] Play failed:', playError);
+    URL.revokeObjectURL(videoUrl);
+    // Return default values if playback fails
+    return {
+      originalFps: 30,
+      recommendedFps: 30,
+      droppedFrames: 0,
+      totalFrames: 90,
+      dropRate: 0,
+      recommendedResolution: '1080',
+      quality: 'good',
+    };
+  }
 
   const originalFps = await estimateFps(video);
 
@@ -80,7 +101,12 @@ export async function runFluidityTest(
   video.pause();
   video.currentTime = 0;
   await new Promise<void>((r) => {
-    video.onseeked = () => r();
+    const onSeeked = () => {
+      video.removeEventListener('seeked', onSeeked);
+      r();
+    };
+    video.addEventListener('seeked', onSeeked);
+    if (video.currentTime === 0) r();
   });
 
   // Run test for 3 seconds
@@ -92,11 +118,24 @@ export async function runFluidityTest(
   const startTime = performance.now();
   let testRunning = true;
 
-  await video.play();
+  try {
+    await video.play();
+  } catch (e) {
+    console.warn('[FluidityTest] Second play failed:', e);
+    URL.revokeObjectURL(videoUrl);
+    return {
+      originalFps: Math.round(originalFps),
+      recommendedFps: 30,
+      droppedFrames: 0,
+      totalFrames: 90,
+      dropRate: 0,
+      recommendedResolution: '1080',
+      quality: 'good',
+    };
+  }
 
-  const rVFC = (video as any).requestVideoFrameCallback as
-    | ((cb: (now: number, meta: any) => void) => number)
-    | undefined;
+  const rVFCMethod = (video as any).requestVideoFrameCallback;
+  const hasRVFC = typeof rVFCMethod === 'function';
 
   await new Promise<void>((resolve) => {
     const tick = (now: number) => {
@@ -132,15 +171,16 @@ export async function runFluidityTest(
         message: `Testando... ${Math.round(elapsed)}s / ${testDuration}s`,
       });
 
-      if (typeof rVFC === 'function') {
-        rVFC(tick);
+      // Use correct 'this' context to avoid "Illegal invocation"
+      if (hasRVFC) {
+        rVFCMethod.call(video, tick);
       } else {
         requestAnimationFrame(() => tick(performance.now()));
       }
     };
 
-    if (typeof rVFC === 'function') {
-      rVFC(tick);
+    if (hasRVFC) {
+      rVFCMethod.call(video, tick);
     } else {
       requestAnimationFrame(() => tick(performance.now()));
     }

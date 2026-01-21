@@ -423,21 +423,19 @@ export async function processVideo(
         renderFrame();
       }
 
-      const rVFC = (video as any).requestVideoFrameCallback as
-        | ((cb: (now: number, meta: any) => void) => number)
-        | undefined;
+      const rVFCMethod = (video as any).requestVideoFrameCallback;
 
-      if (typeof rVFC === 'function') {
-        rVFC((n: number) => tick(n));
+      if (typeof rVFCMethod === 'function') {
+        // Use correct 'this' context to avoid "Illegal invocation"
+        rVFCMethod.call(video, (n: number) => tick(n));
       }
     };
 
-    const rVFC = (video as any).requestVideoFrameCallback as
-      | ((cb: (now: number, meta: any) => void) => number)
-      | undefined;
+    const rVFCMethod = (video as any).requestVideoFrameCallback;
 
-    if (typeof rVFC === 'function') {
-      rVFC((n: number) => tick(n));
+    if (typeof rVFCMethod === 'function') {
+      // Use correct 'this' context to avoid "Illegal invocation"
+      rVFCMethod.call(video, (n: number) => tick(n));
       return;
     }
 
