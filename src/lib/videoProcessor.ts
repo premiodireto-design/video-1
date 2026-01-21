@@ -293,6 +293,7 @@ export async function processVideo(
   let animationId: number = 0;
   let isRecording = true;
   const endTime = duration - trimEnd;
+  let lastProgressUpdate = 0;
 
   const renderFrame = () => {
     // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
@@ -333,15 +334,19 @@ export async function processVideo(
       ctx.restore();
     }
 
-    // Update progress
-    const currentProgress = video.currentTime - trimStart;
-    const progress = 20 + (currentProgress / effectiveDuration) * 75;
-    onProgress({
-      videoId,
-      progress: Math.min(95, Math.round(progress)),
-      stage: 'encoding',
-      message: `Processando: ${Math.round((currentProgress / effectiveDuration) * 100)}%`,
-    });
+    // Throttle progress updates to reduce UI overhead (every 500ms)
+    const now = performance.now();
+    if (now - lastProgressUpdate > 500) {
+      lastProgressUpdate = now;
+      const currentProgress = video.currentTime - trimStart;
+      const progress = 20 + (currentProgress / effectiveDuration) * 75;
+      onProgress({
+        videoId,
+        progress: Math.min(95, Math.round(progress)),
+        stage: 'encoding',
+        message: `Processando: ${Math.round((currentProgress / effectiveDuration) * 100)}%`,
+      });
+    }
   };
 
   const stopRecording = () => {
@@ -456,7 +461,8 @@ export async function processVideo(
       } catch {}
 
       // Start recording only after we tried attaching audio
-      recorder.start(100);
+      // Use 1000ms timeslice for stable encoding (less buffer pressure)
+      recorder.start(1000);
       scheduleFrames();
     }).catch((err2) => {
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
