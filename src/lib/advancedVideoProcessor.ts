@@ -16,6 +16,7 @@ export interface AdvancedSettingsType {
   removeBlackBars: boolean;
   watermark: string;
   useAiFraming: boolean;
+  useOriginalFps?: boolean; // Match export FPS to original video FPS
   enableCaptions: boolean;
   captionStyle: 'bottom' | 'center' | 'top';
   captionLanguage: 'original' | 'pt-BR' | 'en-US' | 'es-ES';
@@ -590,9 +591,13 @@ export async function processAdvancedVideo(
         await audioContext?.resume();
       } catch {}
 
-      if (!settings.maxQuality) {
+      // Detect original FPS when useOriginalFps is ON, or when maxQuality is OFF
+      if (settings.useOriginalFps || !settings.maxQuality) {
         const estimated = await estimateVideoFps(video);
-        if (estimated) fps = clampFps(Math.round(estimated));
+        if (estimated) {
+          fps = clampFps(Math.round(estimated));
+          console.log(`[AdvancedProcessor] Using detected FPS: ${fps}`);
+        }
       }
 
       stream = canvas.captureStream(fps);
