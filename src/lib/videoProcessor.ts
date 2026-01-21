@@ -1,5 +1,6 @@
 import type { GreenArea } from './greenDetection';
 import { captureVideoFrame, analyzeVideoFrame, calculateSmartPosition, type FrameAnalysis } from './frameAnalyzer';
+import { clampFps, estimateVideoFps } from './videoFps';
 
 export interface ProcessingSettings {
   fitMode: 'cover' | 'contain';
@@ -222,11 +223,8 @@ export async function processVideo(
 
   // Set up MediaRecorder (video from canvas + audio from the source video)
   // IMPORTANT: keep capture FPS aligned with our render cadence.
-  const targetFps = settings.maxQuality ? 60 : 30;
-  const canvasStream = canvas.captureStream(targetFps);
-
-  // We start with the canvas video track, then (after playback starts) we attach an audio track.
-  const combinedStream = new MediaStream(canvasStream.getVideoTracks());
+  // When maxQuality is OFF, we still try to match the *original* FPS (up to 60) to avoid perceived stutter.
+  let targetFps = settings.maxQuality ? 60 : 30;
 
   // Prefer MP4 when supported (requested). If the browser can't record MP4 reliably,
   // we fail fast with a clear error instead of silently switching formats.
@@ -240,7 +238,7 @@ export async function processVideo(
 
   // Audio capture helpers
   let audioContext: AudioContext | null = null;
-  const attachAudioTrack = async (): Promise<boolean> => {
+  const attachAudioTrack = async (combinedStream: MediaStream): Promise<boolean> => {
     // 1) Best option: captureStream() from the video element (usually most reliable)
     const anyVideo = video as any;
     const captureFn = (anyVideo.captureStream || anyVideo.mozCaptureStream)?.bind(video);
@@ -532,9 +530,21 @@ export async function processVideo(
         await audioContext?.resume();
       } catch {}
 
+      // Estimate source FPS while playing to avoid output stutter (30fps export from 60fps sources looks like "travando").
+      if (!settings.maxQuality) {
+        const estimated = await estimateVideoFps(video);
+        if (estimated) {
+          targetFps = clampFps(Math.round(estimated));
+        }
+      }
+
+      const canvasStream = canvas.captureStream(targetFps);
+      // We start with the canvas video track, then (after playback starts) we attach an audio track.
+      const combinedStream = new MediaStream(canvasStream.getVideoTracks());
+
       // Attach audio track AFTER playback starts (more reliable across browsers)
       try {
-        const ok = await attachAudioTrack();
+        const ok = await attachAudioTrack(combinedStream);
         if (!ok) {
           reject(new Error('Não foi possível capturar o áudio do vídeo'));
           return;

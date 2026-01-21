@@ -7,6 +7,7 @@ import {
   calculateSmartPosition,
   type FrameAnalysis,
 } from './frameAnalyzer';
+import { clampFps, estimateVideoFps } from './videoFps';
 
 export interface AdvancedSettingsType {
   fitMode: 'cover' | 'contain' | 'fill';
@@ -516,10 +517,11 @@ export async function processAdvancedVideo(
       );
 
       // Setup MediaRecorder
-      const fps = settings.maxQuality ? 60 : 30;
+      // When maxQuality is OFF, try to match the source FPS (up to 60) to avoid perceived stutter.
+      let fps = settings.maxQuality ? 60 : 30;
       const bitrate = settings.maxQuality ? 12000000 : 6000000;
-      
-      const stream = canvas.captureStream(fps);
+
+      let stream: MediaStream | null = null;
 
       // Progress throttling: frequent UI updates during recording can freeze frames.
       let lastProgressAt = 0;
@@ -557,60 +559,24 @@ export async function processAdvancedVideo(
         }
       }
 
-      // Add audio track to stream
-      destNode.stream.getAudioTracks().forEach(track => stream.addTrack(track));
-
-      const mimeType = [
-        'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-        'video/mp4;codecs=avc1,mp4a.40.2',
-        'video/mp4',
-      ].find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
-
-      if (!mimeType) {
-        throw new Error('Seu navegador não suporta gravação direta em MP4 no Modo Avançado.');
-      }
-
-      const recorder = new MediaRecorder(stream, {
-        mimeType,
-        // Lower bitrate helps avoid encoder stalls that manifest as frozen frames.
-        videoBitsPerSecond: settings.maxQuality ? 12000000 : 6000000,
-        audioBitsPerSecond: 160000,
-      });
-
-      // Periodically flush encoder buffers to reduce long stalls/frozen spans.
-      const flushTimer = window.setInterval(() => {
-        try {
-          if (recorder.state === 'recording' && typeof (recorder as any).requestData === 'function') {
-            (recorder as any).requestData();
-          }
-        } catch {
-          // ignore
-        }
-      }, 1000);
+      let recorder: MediaRecorder | null = null;
+      let flushTimer: number | null = null;
 
       const chunks: Blob[] = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
 
-      recorder.onstop = () => {
+      const handleStop = () => {
         URL.revokeObjectURL(templateUrl);
         URL.revokeObjectURL(videoUrl);
 
-        window.clearInterval(flushTimer);
+        if (flushTimer) window.clearInterval(flushTimer);
         
         if (audioContext) {
           audioContext.close();
         }
         
-        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType });
+        const blob = new Blob(chunks, { type: recorder?.mimeType || 'video/mp4' });
         onProgress({ videoId, progress: 100, stage: 'done', message: 'Concluído!' });
         resolve(blob);
-      };
-
-      recorder.onerror = (e) => {
-        window.clearInterval(flushTimer);
-        reject(new Error('Recording failed'));
       };
 
       // Reset video and start recording
@@ -622,6 +588,53 @@ export async function processAdvancedVideo(
       try {
         await audioContext?.resume();
       } catch {}
+
+      if (!settings.maxQuality) {
+        const estimated = await estimateVideoFps(video);
+        if (estimated) fps = clampFps(Math.round(estimated));
+      }
+
+      stream = canvas.captureStream(fps);
+      // Add audio track to stream
+      destNode.stream.getAudioTracks().forEach((track) => stream!.addTrack(track));
+
+      const mimeType = [
+        'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+        'video/mp4;codecs=avc1,mp4a.40.2',
+        'video/mp4',
+      ].find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
+
+      if (!mimeType) {
+        throw new Error('Seu navegador não suporta gravação direta em MP4 no Modo Avançado.');
+      }
+
+      recorder = new MediaRecorder(stream, {
+        mimeType,
+        // Lower bitrate helps avoid encoder stalls that manifest as frozen frames.
+        videoBitsPerSecond: bitrate,
+        audioBitsPerSecond: 160000,
+      });
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+
+      recorder.onstop = handleStop;
+      recorder.onerror = () => {
+        if (flushTimer) window.clearInterval(flushTimer);
+        reject(new Error('Recording failed'));
+      };
+
+      // Periodically flush encoder buffers to reduce long stalls/frozen spans.
+      flushTimer = window.setInterval(() => {
+        try {
+          if (recorder && recorder.state === 'recording' && typeof (recorder as any).requestData === 'function') {
+            (recorder as any).requestData();
+          }
+        } catch {
+          // ignore
+        }
+      }, 1000);
 
       // Start dubbed audio if available
       if (dubbedAudioSource) {
