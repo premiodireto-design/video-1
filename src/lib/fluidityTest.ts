@@ -250,12 +250,17 @@ export async function runFluidityTest(
 }
 
 async function estimateFps(video: HTMLVideoElement): Promise<number> {
-  const rVFC = (video as any).requestVideoFrameCallback as
-    | ((cb: (now: number, meta: any) => void) => number)
-    | undefined;
+  const rVFCMethod = (video as any).requestVideoFrameCallback;
 
-  if (typeof rVFC !== 'function') {
+  if (typeof rVFCMethod !== 'function') {
     // Fallback: assume 30 fps
+    console.log('[FluidityTest] rVFC not available, defaulting to 30fps');
+    return 30;
+  }
+
+  // Ensure video is playing before measuring
+  if (video.paused || video.ended) {
+    console.log('[FluidityTest] Video not playing, defaulting to 30fps');
     return 30;
   }
 
@@ -264,8 +269,27 @@ async function estimateFps(video: HTMLVideoElement): Promise<number> {
     let lastNow: number | null = null;
     let frames = 0;
     const maxFrames = 30;
+    let finished = false;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      
+      if (deltas.length < 5) {
+        console.log('[FluidityTest] Not enough samples, defaulting to 30fps');
+        resolve(30);
+        return;
+      }
+      const avg = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+      const fps = avg > 0 ? 1000 / avg : 30;
+      const clampedFps = Math.min(60, Math.max(24, Math.round(fps)));
+      console.log(`[FluidityTest] Estimated FPS: ${clampedFps} (avg delta: ${avg.toFixed(2)}ms)`);
+      resolve(clampedFps);
+    };
 
     const tick = (now: number) => {
+      if (finished) return;
+      
       if (video.paused || video.ended) {
         finish();
         return;
@@ -283,20 +307,12 @@ async function estimateFps(video: HTMLVideoElement): Promise<number> {
         return;
       }
 
-      rVFC(tick);
+      // Use correct 'this' context to avoid "Illegal invocation"
+      rVFCMethod.call(video, tick);
     };
 
-    const finish = () => {
-      if (deltas.length < 5) {
-        resolve(30);
-        return;
-      }
-      const avg = deltas.reduce((a, b) => a + b, 0) / deltas.length;
-      const fps = avg > 0 ? 1000 / avg : 30;
-      resolve(Math.min(60, Math.max(24, Math.round(fps))));
-    };
-
-    rVFC(tick);
+    // Use correct 'this' context to avoid "Illegal invocation"
+    rVFCMethod.call(video, tick);
 
     // Safety timeout
     setTimeout(finish, 2000);

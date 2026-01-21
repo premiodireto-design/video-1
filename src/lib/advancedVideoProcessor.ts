@@ -566,21 +566,51 @@ export async function processAdvancedVideo(
 
       const chunks: Blob[] = [];
 
+      let stopCompleted = false;
+      let dataReceivedAfterStop = false;
+      
       const handleStop = () => {
-        URL.revokeObjectURL(templateUrl);
-        URL.revokeObjectURL(videoUrl);
+        const finalizeRecording = () => {
+          if (stopCompleted) return;
+          stopCompleted = true;
+          
+          URL.revokeObjectURL(templateUrl);
+          URL.revokeObjectURL(videoUrl);
 
-        if (flushTimer) window.clearInterval(flushTimer);
+          if (flushTimer) window.clearInterval(flushTimer);
+          
+          // Stop all tracks to prevent resource leaks
+          try {
+            if (stream) {
+              stream.getTracks().forEach(track => {
+                try { track.stop(); } catch {}
+              });
+            }
+          } catch {}
+          
+          if (audioContext) {
+            audioContext.close();
+          }
+          
+          // Give a bit more time for final data to arrive
+          setTimeout(() => {
+            const blob = new Blob(chunks, { type: recorder?.mimeType || 'video/webm' });
+            // Attach capture FPS so conversion can keep cadence.
+            (blob as any).__targetFps = fps;
+            
+            console.log(`[AdvancedProcessor] Recording complete: ${chunks.length} chunks, ${(blob.size / 1024 / 1024).toFixed(2)} MB`);
+            
+            onProgress({ videoId, progress: 100, stage: 'done', message: 'Concluído!' });
+            resolve(blob);
+          }, 300);
+        };
         
-        if (audioContext) {
-          audioContext.close();
+        // Wait for final data chunk after stop
+        if (!dataReceivedAfterStop) {
+          setTimeout(finalizeRecording, 500);
+        } else {
+          finalizeRecording();
         }
-        
-        const blob = new Blob(chunks, { type: recorder?.mimeType || 'video/webm' });
-        // Attach capture FPS so conversion can keep cadence.
-        (blob as any).__targetFps = fps;
-        onProgress({ videoId, progress: 100, stage: 'done', message: 'Concluído!' });
-        resolve(blob);
       };
 
       // Reset video and start recording
@@ -624,7 +654,12 @@ export async function processAdvancedVideo(
       });
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
+        if (e.data && e.data.size > 0) {
+          chunks.push(e.data);
+          if (recorder?.state === 'inactive') {
+            dataReceivedAfterStop = true;
+          }
+        }
       };
 
       recorder.onstop = handleStop;
