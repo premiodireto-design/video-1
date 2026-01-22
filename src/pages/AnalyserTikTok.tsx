@@ -1,21 +1,16 @@
-import { useState, useCallback } from 'react';
 import { Header } from '@/components/layout/Header';
 import { AnalyserHeader } from '@/components/analyser/AnalyserHeader';
 import { ProfileInput } from '@/components/analyser/ProfileInput';
-import { CookieInput } from '@/components/analyser/CookieInput';
 import { KPICards } from '@/components/analyser/KPICards';
 import { FiltersSection } from '@/components/analyser/FiltersSection';
 import { VideoList } from '@/components/analyser/VideoList';
 import { DownloadSection } from '@/components/analyser/DownloadSection';
 import { useAnalyserStore } from '@/hooks/useAnalyserStore';
+import { Card, CardContent } from '@/components/ui/card';
+import { AlertCircle } from 'lucide-react';
 
 export default function AnalyserTikTok() {
   const store = useAnalyserStore('tiktok');
-  const [hasCookie, setHasCookie] = useState(false);
-
-  const handleCookieChange = useCallback((hasIt: boolean) => {
-    setHasCookie(hasIt);
-  }, []);
 
   return (
     <div className="min-h-screen bg-background">
@@ -27,20 +22,28 @@ export default function AnalyserTikTok() {
           subtitle="Carregue perfis públicos, filtre por métricas e exporte vídeos"
         />
 
-        <CookieInput 
-          platform="tiktok"
-          onCookieChange={handleCookieChange}
-        />
+        <Card className="border-yellow-500/50 bg-yellow-500/10">
+          <CardContent className="pt-4">
+            <div className="flex gap-3 items-start">
+              <AlertCircle className="h-5 w-5 text-yellow-500 mt-0.5 shrink-0" />
+              <div className="text-sm">
+                <p className="font-medium text-yellow-600 dark:text-yellow-400">TikTok Analyser em desenvolvimento</p>
+                <p className="text-muted-foreground">
+                  No momento, apenas o Instagram Analyser está funcionando. 
+                  O TikTok será implementado em breve.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
-        {hasCookie && (
-          <ProfileInput 
-            platform="tiktok"
-            onLoadVideos={store.loadVideos}
-            isLoading={store.isLoadingVideos}
-            loadedUsername={store.loadedUsername}
-            onClear={store.clearVideos}
-          />
-        )}
+        <ProfileInput 
+          platform="tiktok"
+          onLoadVideos={store.loadVideos}
+          isLoading={store.isLoadingVideos}
+          loadedUsername={store.loadedUsername}
+          onClear={store.clearVideos}
+        />
 
         {store.videos.length > 0 && (
           <>
@@ -80,7 +83,7 @@ export default function AnalyserTikTok() {
           </>
         )}
 
-        {store.videos.length === 0 && !store.isLoadingVideos && hasCookie && (
+        {store.videos.length === 0 && !store.isLoadingVideos && (
           <div className="text-center py-12 text-muted-foreground">
             <p>Digite um @ ou URL de perfil acima para carregar os vídeos.</p>
             <p className="text-sm mt-2">Funciona apenas com perfis públicos.</p>

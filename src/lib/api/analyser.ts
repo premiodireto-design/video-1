@@ -60,46 +60,11 @@ export const analyserApi = {
     }
   },
 
-  async getTikTokUserFeed(username: string, limit: number = 50): Promise<ApiResponse<UserFeedData>> {
-    try {
-      // Get cookie from localStorage
-      const cookie = getCookie('tiktok');
-      
-      const { data, error } = await supabase.functions.invoke('tiktok-feed', {
-        body: { username, limit, cookie },
-      });
-      
-      if (error) {
-        console.error('Edge function error:', error);
-        return {
-          success: false,
-          error: error.message || 'Erro ao carregar feed do TikTok',
-        };
-      }
-      
-      if (!data?.success) {
-        return {
-          success: false,
-          error: data?.error || 'Erro desconhecido',
-        };
-      }
-      
-      return {
-        success: true,
-        data: {
-          videos: data.data.videos,
-          username: data.data.username,
-          totalCount: data.data.totalCount,
-          hasMore: data.data.hasMore,
-          cursor: data.data.cursor,
-        },
-      };
-    } catch (err) {
-      console.error('API Error:', err);
-      return {
-        success: false,
-        error: 'Erro de conexão ao carregar TikTok',
-      };
-    }
+  async getTikTokUserFeed(_username: string, _limit: number = 50): Promise<ApiResponse<UserFeedData>> {
+    // TikTok implementation will come next
+    return {
+      success: false,
+      error: 'TikTok Analyser em desenvolvimento',
+    };
   },
 };

@@ -86,12 +86,12 @@ export async function processVideo(
   });
 
   const duration = video.duration;
-  const trimStart = 0; // Sem corte no início para evitar travada
-  const trimEnd = 0.3; // Cortar apenas 0.3s do final
+  const trimStart = 0.5; // Cortar 0.5s do início
+  const trimEnd = 0.5; // Cortar 0.5s do final
   const effectiveDuration = Math.max(0.5, duration - trimStart - trimEnd);
   
-  // Set video to start from the beginning (no trim at start)
-  video.currentTime = 0;
+  // Set video to start after trim
+  video.currentTime = trimStart;
   
   await new Promise<void>((res) => {
     video.onseeked = () => res();
@@ -293,24 +293,21 @@ export async function processVideo(
   let animationId: number = 0;
   let isRecording = true;
   const endTime = duration - trimEnd;
-  let lastProgressUpdate = 0;
 
   const renderFrame = () => {
     // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
 
-    // Clear with white background (to match template background and remove any borders)
-    ctx.fillStyle = '#FFFFFF';
+    // Clear with black
+    ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, 1080, 1920);
 
-    // Fill the green area with white first to ensure no artifacts
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(x, y, ww, wh);
-
-    // Draw video in the green area position with exact clipping (no margin = no visible border)
+    // Draw video in the green area position with clipping
+    // Use a slightly larger clip area (2px margin) to ensure no green edge pixels are visible
+    const margin = 2;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x, y, ww, wh);
+    ctx.rect(x + margin, y + margin, ww - margin * 2, wh - margin * 2);
     ctx.clip();
     ctx.drawImage(video, x + offsetX, y + offsetY, scaledW, scaledH);
     ctx.restore();
@@ -334,19 +331,15 @@ export async function processVideo(
       ctx.restore();
     }
 
-    // Throttle progress updates to reduce UI overhead (every 500ms)
-    const now = performance.now();
-    if (now - lastProgressUpdate > 500) {
-      lastProgressUpdate = now;
-      const currentProgress = video.currentTime - trimStart;
-      const progress = 20 + (currentProgress / effectiveDuration) * 75;
-      onProgress({
-        videoId,
-        progress: Math.min(95, Math.round(progress)),
-        stage: 'encoding',
-        message: `Processando: ${Math.round((currentProgress / effectiveDuration) * 100)}%`,
-      });
-    }
+    // Update progress
+    const currentProgress = video.currentTime - trimStart;
+    const progress = 20 + (currentProgress / effectiveDuration) * 75;
+    onProgress({
+      videoId,
+      progress: Math.min(95, Math.round(progress)),
+      stage: 'encoding',
+      message: `Processando: ${Math.round((currentProgress / effectiveDuration) * 100)}%`,
+    });
   };
 
   const stopRecording = () => {
@@ -461,8 +454,7 @@ export async function processVideo(
       } catch {}
 
       // Start recording only after we tried attaching audio
-      // Use 1000ms timeslice for stable encoding (less buffer pressure)
-      recorder.start(1000);
+      recorder.start(100);
       scheduleFrames();
     }).catch((err2) => {
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
