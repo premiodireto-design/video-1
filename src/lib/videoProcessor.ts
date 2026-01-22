@@ -307,6 +307,39 @@ export async function processVideo(
   let animationId: number = 0;
   let isRecording = true;
   const endTime = duration - trimEnd;
+  
+  // Stall detection - if video stops progressing for too long, try to recover
+  let lastProgressTime = 0;
+  let lastVideoTime = 0;
+  let stallCheckInterval: ReturnType<typeof setInterval> | null = null;
+  
+  const startStallDetection = () => {
+    stallCheckInterval = setInterval(() => {
+      if (!isRecording) {
+        if (stallCheckInterval) clearInterval(stallCheckInterval);
+        return;
+      }
+      
+      const now = performance.now();
+      const currentVideoTime = video.currentTime;
+      
+      // If video time hasn't changed in 2 seconds but we're still recording
+      if (currentVideoTime === lastVideoTime && now - lastProgressTime > 2000) {
+        console.warn('[VideoProcessor] Stall detected, attempting recovery...');
+        
+        // Try to recover by nudging the video forward slightly
+        if (!video.paused && !video.ended && currentVideoTime < endTime) {
+          // Resume playback if needed
+          video.play().catch(() => {});
+        }
+      }
+      
+      if (currentVideoTime !== lastVideoTime) {
+        lastProgressTime = now;
+        lastVideoTime = currentVideoTime;
+      }
+    }, 500);
+  };
 
   const renderFrame = () => {
     // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
@@ -345,26 +378,45 @@ export async function processVideo(
       ctx.restore();
     }
 
-    // Update progress
+    // Update progress (throttled to reduce UI overhead)
     const currentProgress = video.currentTime - trimStart;
-    const progress = 20 + (currentProgress / effectiveDuration) * 75;
-    onProgress({
-      videoId,
-      progress: Math.min(95, Math.round(progress)),
-      stage: 'encoding',
-      message: `Processando: ${Math.round((currentProgress / effectiveDuration) * 100)}%`,
-    });
+    const progressPercent = Math.round((currentProgress / effectiveDuration) * 100);
+    
+    // Only update UI every 5% to reduce main thread pressure
+    if (progressPercent % 5 === 0 || progressPercent >= 99) {
+      const progress = 20 + (currentProgress / effectiveDuration) * 75;
+      onProgress({
+        videoId,
+        progress: Math.min(95, Math.round(progress)),
+        stage: 'encoding',
+        message: `Processando: ${progressPercent}%`,
+      });
+    }
   };
 
   const stopRecording = () => {
     if (!isRecording) return;
     isRecording = false;
+    
+    if (stallCheckInterval) {
+      clearInterval(stallCheckInterval);
+      stallCheckInterval = null;
+    }
+    
     try {
       renderFrame();
     } catch {}
     setTimeout(() => {
       if (recorder.state === 'recording') {
-        recorder.stop();
+        // Flush any remaining data before stopping
+        try {
+          recorder.requestData();
+        } catch {}
+        setTimeout(() => {
+          if (recorder.state === 'recording') {
+            recorder.stop();
+          }
+        }, 100);
       }
     }, 300);
   };
@@ -377,7 +429,22 @@ export async function processVideo(
     const onFrame = () => {
       if (!isRecording) return;
       
-      if (video.currentTime >= endTime || video.ended || video.paused) {
+      // Only stop if we've truly reached the end
+      if (video.currentTime >= endTime) {
+        stopRecording();
+        return;
+      }
+      
+      // If video paused unexpectedly, try to resume
+      if (video.paused && !video.ended && isRecording) {
+        video.play().catch(() => {
+          // If we can't resume, stop recording
+          stopRecording();
+        });
+      }
+      
+      // If video ended early, stop recording
+      if (video.ended) {
         stopRecording();
         return;
       }
@@ -400,13 +467,27 @@ export async function processVideo(
     }
   };
 
+  // Cleanup function to stop all intervals
+  const cleanup = () => {
+    if (stallCheckInterval) {
+      clearInterval(stallCheckInterval);
+      stallCheckInterval = null;
+    }
+  };
+
   return new Promise<Blob>((resolve, reject) => {
     recorder.onstop = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
+      cleanup();
 
       try {
         audioContext?.close();
+      } catch {}
+      
+      // Stop all video tracks to release resources
+      try {
+        combinedStream.getTracks().forEach(track => track.stop());
       } catch {}
 
       setTimeout(() => {
@@ -436,6 +517,7 @@ export async function processVideo(
     recorder.onerror = () => {
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
+      cleanup();
       try {
         audioContext?.close();
       } catch {}
@@ -445,6 +527,7 @@ export async function processVideo(
     video.onerror = () => {
       stopRecording();
       cancelAnimationFrame(animationId);
+      cleanup();
       try {
         audioContext?.close();
       } catch {}
@@ -455,6 +538,21 @@ export async function processVideo(
     // We set volume very low instead to avoid audible playback
     video.muted = false;
     video.volume = 0.001;
+
+    // Periodic buffer flush to prevent encoder stalls (every 1 second)
+    let flushInterval: ReturnType<typeof setInterval> | null = null;
+    
+    const startBufferFlush = () => {
+      flushInterval = setInterval(() => {
+        if (recorder.state === 'recording') {
+          try {
+            recorder.requestData();
+          } catch {}
+        } else if (flushInterval) {
+          clearInterval(flushInterval);
+        }
+      }, 1000);
+    };
 
     // Start playback from trim point
     video.play().then(async () => {
@@ -467,10 +565,25 @@ export async function processVideo(
         await attachAudioTrack();
       } catch {}
 
-      // Start recording only after we tried attaching audio
-      recorder.start(100);
+      // Initialize stall detection
+      lastProgressTime = performance.now();
+      lastVideoTime = video.currentTime;
+      startStallDetection();
+
+      // Start recording with timeslice for more stable encoding
+      recorder.start(1000);
+      
+      // Start periodic buffer flush
+      startBufferFlush();
+      
+      // Prime the canvas with a frame before starting the loop
+      try {
+        renderFrame();
+      } catch {}
+      
       scheduleFrames();
     }).catch((err2) => {
+      if (stallCheckInterval) clearInterval(stallCheckInterval);
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
     });
   });
