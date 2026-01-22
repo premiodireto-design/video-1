@@ -253,19 +253,33 @@ export async function processVideo(
     }
 
     // 2) Fallback: AudioContext -> MediaStreamDestination
+    // CRITICAL: Connect source BOTH to destination (for recording) AND to speakers (to keep audio stream active)
     try {
       audioContext = new AudioContext({ latencyHint: 'playback' });
       const source = audioContext.createMediaElementSource(video);
       const destination = audioContext.createMediaStreamDestination();
-      const gain = audioContext.createGain();
-      gain.gain.value = 0; // silent output
-      source.connect(gain);
-      gain.connect(destination);
+      
+      // Create a gain node for recording (full volume)
+      const recordingGain = audioContext.createGain();
+      recordingGain.gain.value = 1.0; // Full volume for recording
+      
+      // Create a gain node for speakers (silent to avoid echo)
+      const speakerGain = audioContext.createGain();
+      speakerGain.gain.value = 0.001; // Near-silent for speakers
+      
+      // Connect source to recording destination at full volume
+      source.connect(recordingGain);
+      recordingGain.connect(destination);
+      
+      // IMPORTANT: Also connect to speakers to keep the audio stream active
+      // Without this connection, the audio stream can become inactive and cause dropouts
+      source.connect(speakerGain);
+      speakerGain.connect(audioContext.destination);
 
       const audioTrack = destination.stream.getAudioTracks()[0];
       if (audioTrack) {
         combinedStream.addTrack(audioTrack);
-        console.log('[VideoProcessor] Audio via AudioContext fallback:', audioTrack.label);
+        console.log('[VideoProcessor] Audio via AudioContext fallback (dual-route):', audioTrack.label);
         return true;
       }
     } catch (e) {
