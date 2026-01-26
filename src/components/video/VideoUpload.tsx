@@ -86,8 +86,8 @@ export function VideoUpload({ videos, onVideosChange, disabled }: VideoUploadPro
       return true;
     });
 
-    // Limit to 50 videos per batch
-    const maxVideos = 50;
+    // Limit to 200 videos per batch
+    const maxVideos = 200;
     const currentCount = videos.length;
     const availableSlots = maxVideos - currentCount;
     
@@ -214,7 +214,7 @@ export function VideoUpload({ videos, onVideosChange, disabled }: VideoUploadPro
               Enviar Vídeos (em massa)
             </CardTitle>
             <CardDescription>
-              Envie de 1 a 50 vídeos para processar em lote
+              Envie de 1 a 200 vídeos para processar em lote
             </CardDescription>
           </div>
           {videos.length > 0 && (
@@ -255,7 +255,7 @@ export function VideoUpload({ videos, onVideosChange, disabled }: VideoUploadPro
               {isLoading ? 'Carregando vídeos...' : 'Arraste e solte ou clique para enviar'}
             </p>
             <p className="text-xs text-muted-foreground">
-              MP4, MOV, WEBM • Máximo 50 vídeos
+              MP4, MOV, WEBM • Máximo 200 vídeos
             </p>
           </div>
         </div>
