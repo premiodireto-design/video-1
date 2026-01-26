@@ -1,17 +1,64 @@
 import JSZip from 'jszip';
 
-const MAX_FILES_PER_ZIP = 15; // Conservative limit to prevent memory issues
-const MAX_ZIP_SIZE_MB = 200; // Approximate max size before splitting
+const MAX_FILES_PER_ZIP = 10; // Conservative limit to prevent memory issues
+const MAX_ZIP_SIZE_MB = 100; // Approximate max size before splitting (reduced for stability)
 
-interface ZipFileEntry {
+export interface ZipFileEntry {
   filename: string;
   data: Blob | ArrayBuffer;
+}
+
+export interface ZipEstimate {
+  totalFiles: number;
+  estimatedZips: number;
+  totalSizeMB: number;
 }
 
 interface ZipGeneratorOptions {
   baseFilename: string;
   onProgress?: (current: number, total: number, stage: 'adding' | 'generating') => void;
   signal?: AbortSignal;
+}
+
+/**
+ * Estimates how many ZIP files will be generated for a given set of entries.
+ * Call this BEFORE generating to show the user what to expect.
+ */
+export function estimateZipCount(entries: ZipFileEntry[]): ZipEstimate {
+  let totalSize = 0;
+  let currentChunkSize = 0;
+  let currentChunkCount = 0;
+  let zipCount = 0;
+
+  for (const entry of entries) {
+    const entrySize = entry.data instanceof Blob 
+      ? entry.data.size 
+      : entry.data.byteLength;
+    
+    totalSize += entrySize;
+    
+    const wouldExceedSize = currentChunkSize + entrySize > MAX_ZIP_SIZE_MB * 1024 * 1024;
+    const wouldExceedCount = currentChunkCount >= MAX_FILES_PER_ZIP;
+    
+    if (currentChunkCount > 0 && (wouldExceedSize || wouldExceedCount)) {
+      zipCount++;
+      currentChunkSize = entrySize;
+      currentChunkCount = 1;
+    } else {
+      currentChunkSize += entrySize;
+      currentChunkCount++;
+    }
+  }
+  
+  if (currentChunkCount > 0) {
+    zipCount++;
+  }
+
+  return {
+    totalFiles: entries.length,
+    estimatedZips: Math.max(1, zipCount),
+    totalSizeMB: Math.round(totalSize / (1024 * 1024) * 10) / 10,
+  };
 }
 
 /**
