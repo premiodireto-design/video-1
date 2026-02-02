@@ -58,8 +58,8 @@ export async function processVideo(
   videoId: string,
   onProgress: ProgressCallback
 ): Promise<Blob> {
-  // Timeout de 3 minutos para vídeos travados
-  const PROCESSING_TIMEOUT = 3 * 60 * 1000;
+  // Timeout máximo (pedido): 1 minuto para vídeos travados
+  const PROCESSING_TIMEOUT = 60 * 1000;
   let processingTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let isTimedOut = false;
   
@@ -326,10 +326,14 @@ export async function processVideo(
   let stallCheckInterval: ReturnType<typeof setInterval> | null = null;
   let flushInterval: ReturnType<typeof setInterval> | null = null;
   let consecutiveStalls = 0;
+  let stallSince: number | null = null;
+  // Will be set when the Promise is created; used to abort from the stall watchdog.
+  let rejectProcessing: ((err: Error) => void) | null = null;
   let renderEveryNFrames = 1;
   let frameCounter = 0;
   let lastReportedBucket = -1;
   const VIDEO_TIME_EPSILON = 0.001;
+  const STALL_ABORT_MS = 60_000;
   const forceRecover = async () => {
     // Try a more aggressive recovery sequence:
     // 1) pause
@@ -372,6 +376,24 @@ export async function processVideo(
       if (Math.abs(currentVideoTime - lastVideoTime) < VIDEO_TIME_EPSILON && now - lastProgressTime > 2000) {
         console.warn('[VideoProcessor] Stall detected, attempting recovery...');
 
+        if (stallSince === null) stallSince = now;
+
+        // Hard-abort after 60s stalled to avoid getting stuck at e.g. 20%
+        if (now - stallSince > STALL_ABORT_MS) {
+          isTimedOut = true;
+          try {
+            if (recorder.state === 'recording') recorder.stop();
+          } catch {}
+          cleanup();
+          cancelAnimationFrame(animationId);
+          rejectProcessing?.(
+            new Error(
+              `Timeout: vídeo travou (sem avançar) e foi abortado (em ~${Math.round(video.currentTime)}s)`
+            )
+          );
+          return;
+        }
+
         consecutiveStalls++;
         // Under heavy load, rendering every single frame can contribute to stalls.
         // Increase frame skipping progressively during stalls.
@@ -386,6 +408,7 @@ export async function processVideo(
         lastProgressTime = now;
         lastVideoTime = currentVideoTime;
         consecutiveStalls = 0;
+        stallSince = null;
         renderEveryNFrames = 1;
       }
     }, 500);
@@ -658,6 +681,14 @@ export async function processVideo(
   };
 
   return new Promise<Blob>((resolve, reject) => {
+    // Allow watchdog to abort safely (once)
+    rejectProcessing = (err: Error) => {
+      // Prevent double-reject/resolve races
+      if (!rejectProcessing) return;
+      rejectProcessing = null;
+      reject(err);
+    };
+
     // Start processing timeout
     processingTimeoutId = setTimeout(() => {
       isTimedOut = true;
@@ -668,7 +699,9 @@ export async function processVideo(
           recorder.stop();
         }
       } catch {}
-      reject(new Error(`Timeout: vídeo travou e foi abortado (provavelmente em ~${Math.round(video.currentTime)}s)`));
+      rejectProcessing?.(
+        new Error(`Timeout: vídeo travou e foi abortado (em ~${Math.round(video.currentTime)}s)`)
+      );
     }, PROCESSING_TIMEOUT);
 
     recorder.onstop = () => {
