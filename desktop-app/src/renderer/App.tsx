@@ -117,12 +117,30 @@ export default function App() {
   };
 
   const getGPULabel = () => {
-    if (!gpuInfo) return 'Detectando...';
-    if (gpuInfo.hasNvidia) return '🟢 NVIDIA NVENC';
-    if (gpuInfo.hasIntelQSV) return '🔵 Intel QSV';
-    if (gpuInfo.hasAMD) return '🔴 AMD AMF';
-    return '⚪ CPU (libx264)';
+    if (!gpuInfo) return '🔄 Detectando...';
+    
+    // Show all available encoders
+    const available: string[] = [];
+    if (gpuInfo.hasNvidia) available.push('NVIDIA');
+    if (gpuInfo.hasIntelQSV) available.push('Intel');
+    if (gpuInfo.hasAMD) available.push('AMD');
+    
+    if (available.length === 0) {
+      return '⚪ CPU (sem GPU compatível)';
+    }
+    
+    // Show primary (will be used) and any alternatives
+    const primary = available[0];
+    const icon = primary === 'NVIDIA' ? '🟢' : primary === 'Intel' ? '🔵' : '🔴';
+    
+    if (available.length === 1) {
+      return `${icon} ${primary}`;
+    }
+    
+    return `${icon} ${primary} (+${available.slice(1).join(', ')})`;
   };
+
+  const hasAnyGPU = gpuInfo && (gpuInfo.hasNvidia || gpuInfo.hasIntelQSV || gpuInfo.hasAMD);
 
   const completedCount = videos.filter((v) => v.status === 'done').length;
   const queuedCount = videos.filter((v) => v.status === 'queued').length;
@@ -148,9 +166,11 @@ export default function App() {
               checked={useGPU}
               onChange={(e) => setUseGPU(e.target.checked)}
               className="w-4 h-4"
-              disabled={!gpuInfo?.hasNvidia && !gpuInfo?.hasIntelQSV && !gpuInfo?.hasAMD}
+              disabled={!hasAnyGPU}
             />
-            <span className="text-sm">Usar GPU</span>
+            <span className="text-sm">
+              {hasAnyGPU ? 'Usar GPU' : 'GPU não detectada'}
+            </span>
           </label>
           <label className="flex items-center gap-2 ml-4">
             <input
