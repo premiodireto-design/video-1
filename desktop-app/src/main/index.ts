@@ -100,6 +100,7 @@ ipcMain.handle('process-video', async (event, options: {
     quality: 'fast' | 'balanced' | 'quality';
     trimStart: number;
     trimEnd: number;
+    useAiFraming?: boolean;
   };
 }) => {
   return processVideo(options, (progress) => {

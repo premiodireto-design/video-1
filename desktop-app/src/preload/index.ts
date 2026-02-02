@@ -22,6 +22,7 @@ export interface ElectronAPI {
       quality: 'fast' | 'balanced' | 'quality';
       trimStart: number;
       trimEnd: number;
+      useAiFraming?: boolean;
     };
   }) => Promise<{ success: boolean; outputPath?: string; error?: string }>;
   onVideoProgress: (callback: (progress: {
