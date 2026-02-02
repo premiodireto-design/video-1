@@ -201,20 +201,20 @@ export function processVideo(
     });
 
     // Build filter complex for chroma key + overlay
-    // Note: We use the video duration instead of a fixed 1s background
+    // IMPORTANT:
+    // - Do NOT set a fixed duration on the background; let overlays stop on the shortest stream (the video).
+    // - The template input is looped via input args (-loop 1), so it lasts for the whole video.
     const filterComplex = [
       // Scale video to fit green area (cover mode)
       `[0:v]scale=w='if(gt(a,${width}/${height}),${width},-1)':h='if(gt(a,${width}/${height}),-1,${height})':force_original_aspect_ratio=increase,crop=${width}:${height}:(iw-${width})/2:0,setsar=1[vid]`,
-      // Template (image) - loop it for video duration
-      `[1:v]loop=loop=-1:size=1:start=0,scale=1080:1920,chromakey=0x00FF00:0.3:0.1[mask]`,
-      // Create black background that matches video duration
-      `[vid]split[vid1][vid2]`,
-      `[vid2]drawbox=c=black:t=fill[bg_sized]`,
-      `[bg_sized]scale=1080:1920[bg]`,
-      // Overlay video in green area
-      `[bg][vid1]overlay=${x}:${y}[base]`,
-      // Overlay template on top - use eof_action to handle different durations
-      `[base][mask]overlay=0:0:eof_action=pass:shortest=1[out]`,
+      // Template with chroma key
+      `[1:v]scale=1080:1920,chromakey=0x00FF00:0.3:0.1[mask]`,
+      // Infinite black background
+      `color=black:s=1080x1920[bg]`,
+      // Overlay video in green area (stop on shortest => video)
+      `[bg][vid]overlay=${x}:${y}:shortest=1[base]`,
+      // Overlay template on top
+      `[base][mask]overlay=0:0:shortest=1[out]`,
     ].join(';');
 
     // Get encoder-specific flags
@@ -227,6 +227,8 @@ export function processVideo(
     const args = [
       '-y', // Overwrite output
       '-i', videoPath,
+      // Loop template image for the entire processing duration
+      '-loop', '1',
       '-i', templatePath,
       '-ss', String(settings.trimStart),
       '-filter_complex', filterComplex,
