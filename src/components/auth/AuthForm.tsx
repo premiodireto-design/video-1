@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Video, Sparkles } from 'lucide-react';
+import { Loader2, Video, Sparkles, Download, Monitor, Zap } from 'lucide-react';
 
 export function AuthForm() {
   const [isLoading, setIsLoading] = useState(false);
@@ -179,6 +179,53 @@ export function AuthForm() {
                 </form>
               </TabsContent>
             </Tabs>
+          </CardContent>
+        </Card>
+
+        {/* Desktop App Download Section */}
+        <Card className="border-primary/20 bg-primary/5">
+          <CardContent className="pt-6">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-primary/10 rounded-xl">
+                <Monitor className="h-6 w-6 text-primary" />
+              </div>
+              <div className="flex-1 space-y-3">
+                <div>
+                  <h3 className="font-semibold flex items-center gap-2">
+                    App Desktop 
+                    <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <Zap className="h-3 w-3" /> 10x mais rápido
+                    </span>
+                  </h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Processe vídeos com aceleração GPU (NVIDIA/Intel/AMD). Sem limites de tamanho.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" className="gap-2" asChild>
+                    <a href="https://github.com/seu-usuario/videotemplate-pro/releases/latest/download/VideoTemplatePro-Setup.exe" download>
+                      <Download className="h-4 w-4" />
+                      Windows
+                    </a>
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-2" asChild>
+                    <a href="https://github.com/seu-usuario/videotemplate-pro/releases/latest/download/VideoTemplatePro.dmg" download>
+                      <Download className="h-4 w-4" />
+                      macOS
+                    </a>
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-2" asChild>
+                    <a href="https://github.com/seu-usuario/videotemplate-pro/releases/latest/download/VideoTemplatePro.AppImage" download>
+                      <Download className="h-4 w-4" />
+                      Linux
+                    </a>
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Requer FFmpeg instalado. <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener noreferrer" className="underline hover:text-primary">Baixar FFmpeg</a>
+                </p>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
