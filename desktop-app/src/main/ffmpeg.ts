@@ -22,16 +22,41 @@ export interface ProcessingProgress {
 
 /**
  * Get FFmpeg binary path
- * In production, it's bundled with the app; in dev, use system FFmpeg
+ * Tries bundled version first, then system FFmpeg, then common install locations
  */
 function getFFmpegPath(): string {
+  const platform = process.platform;
+  const ext = platform === 'win32' ? '.exe' : '';
+  
+  // 1. Try bundled FFmpeg (if app is packaged and ffmpeg-bin exists)
   if (app.isPackaged) {
-    const resourcePath = process.resourcesPath;
-    const platform = process.platform;
-    const ext = platform === 'win32' ? '.exe' : '';
-    return join(resourcePath, 'ffmpeg-bin', `ffmpeg${ext}`);
+    const bundledPath = join(process.resourcesPath, 'ffmpeg-bin', `ffmpeg${ext}`);
+    if (existsSync(bundledPath)) {
+      console.log('[FFmpeg] Using bundled:', bundledPath);
+      return bundledPath;
+    }
   }
-  return 'ffmpeg'; // Use system FFmpeg in dev
+  
+  // 2. Try common Windows installation paths
+  if (platform === 'win32') {
+    const commonPaths = [
+      'C:\\ffmpeg\\bin\\ffmpeg.exe',
+      'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+      'C:\\Program Files (x86)\\ffmpeg\\bin\\ffmpeg.exe',
+      join(process.env.USERPROFILE || '', 'ffmpeg', 'bin', 'ffmpeg.exe'),
+    ];
+    
+    for (const p of commonPaths) {
+      if (existsSync(p)) {
+        console.log('[FFmpeg] Found at:', p);
+        return p;
+      }
+    }
+  }
+  
+  // 3. Fallback to system PATH
+  console.log('[FFmpeg] Using system PATH');
+  return 'ffmpeg';
 }
 
 /**
