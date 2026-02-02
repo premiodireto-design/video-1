@@ -341,13 +341,6 @@ export async function processVideo(
     }, 500);
   };
 
-  // Small overscan factor to ensure video covers any green edges (1.5% extra)
-  const overscan = 1.015;
-  const overscanW = scaledW * overscan;
-  const overscanH = scaledH * overscan;
-  const overscanOffsetX = offsetX - (overscanW - scaledW) / 2;
-  const overscanOffsetY = offsetY - (overscanH - scaledH) / 2;
-
   const renderFrame = () => {
     // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
@@ -357,13 +350,13 @@ export async function processVideo(
     ctx.fillRect(0, 0, 1080, 1920);
 
     // Draw video in the green area position with clipping
-    // Use exact clipping rectangle to match the green area perfectly
+    // Use a slightly larger clip area (2px margin) to ensure no green edge pixels are visible
+    const margin = 2;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x, y, ww, wh);
+    ctx.rect(x + margin, y + margin, ww - margin * 2, wh - margin * 2);
     ctx.clip();
-    // Draw video slightly larger (overscan) to cover any green edges
-    ctx.drawImage(video, x + overscanOffsetX, y + overscanOffsetY, overscanW, overscanH);
+    ctx.drawImage(video, x + offsetX, y + offsetY, scaledW, scaledH);
     ctx.restore();
 
     // Draw template mask on top

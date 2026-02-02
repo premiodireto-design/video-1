@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
+import JSZip from 'jszip';
 import { Header } from '@/components/layout/Header';
 import { TemplateUpload } from '@/components/template/TemplateUpload';
 import { VideoUpload, type VideoFile } from '@/components/video/VideoUpload';
@@ -11,7 +12,6 @@ import {
   type ProcessingProgress
 } from '@/lib/videoProcessor';
 import { convertWebMToMP4, loadFFmpegConverter } from '@/lib/videoConverter';
-import { generateOptimizedZip, downloadZips, createZipEntry } from '@/lib/zipGenerator';
 import { type GreenArea } from '@/lib/greenDetection';
 
 export default function Dashboard() {
@@ -243,21 +243,18 @@ export default function Dashboard() {
     });
 
     try {
-      const entries: { filename: string; data: Blob | ArrayBuffer }[] = [];
+      const zip = new JSZip();
 
       // Only load FFmpeg if at least one file needs conversion
       const needsConversion = completedVideos.some(v => v.outputBlob && !v.outputBlob.type.includes('mp4'));
       if (needsConversion) {
+        // Pre-load FFmpeg converter
         await loadFFmpegConverter();
       }
 
       for (let i = 0; i < completedVideos.length; i++) {
         const video = completedVideos[i];
         if (!video.outputBlob) continue;
-
-        if (conversionAbortRef.current?.signal.aborted) {
-          throw new DOMException('Aborted', 'AbortError');
-        }
 
         setConversionProgress({
           current: i + 1,
@@ -266,25 +263,31 @@ export default function Dashboard() {
           mode: 'mp4',
         });
 
+        toast({
+          title: `Preparando ${i + 1} de ${completedVideos.length}`,
+          description: video.name,
+        });
+
         const base = video.name.replace(/\.[^/.]+$/, '');
         const filename = `${base}_canva_${String(i + 1).padStart(3, '0')}.mp4`;
 
         try {
           if (video.outputBlob.type.includes('mp4')) {
-            entries.push(createZipEntry(filename, video.outputBlob));
+            zip.file(filename, video.outputBlob);
           } else {
             const mp4Blob = await convertWebMToMP4(video.outputBlob, video.name, {
               signal: conversionAbortRef.current?.signal,
             });
-            entries.push(createZipEntry(filename, mp4Blob));
+            zip.file(filename, mp4Blob);
           }
         } catch (err) {
           const isAbort = err instanceof DOMException && err.name === 'AbortError';
           if (isAbort) throw err;
 
           console.error('Error converting video:', video.name, err);
+          // Add as WebM if conversion fails
           const fallback = `${base}_canva_${String(i + 1).padStart(3, '0')}.webm`;
-          entries.push(createZipEntry(fallback, video.outputBlob));
+          zip.file(fallback, video.outputBlob);
         }
       }
 
@@ -293,18 +296,19 @@ export default function Dashboard() {
         description: 'Finalizando o arquivo',
       });
 
-      const zips = await generateOptimizedZip(entries, {
-        baseFilename: 'videos_processados_mp4',
-        signal: conversionAbortRef.current?.signal,
-      });
-
-      downloadZips(zips, 'videos_processados_mp4');
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'videos_processados_mp4.zip';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
 
       toast({
         title: 'Download concluído!',
-        description: zips.length > 1 
-          ? `${completedVideos.length} vídeo(s) em ${zips.length} arquivos ZIP`
-          : `${completedVideos.length} vídeo(s) incluído(s) no ZIP`,
+        description: `${completedVideos.length} vídeo(s) incluído(s) no ZIP`,
       });
     } catch (error) {
       const isAbort = error instanceof DOMException && error.name === 'AbortError';
@@ -336,7 +340,7 @@ export default function Dashboard() {
     });
 
     try {
-      const entries: { filename: string; data: Blob | ArrayBuffer }[] = [];
+      const zip = new JSZip();
 
       for (let i = 0; i < completedVideos.length; i++) {
         const video = completedVideos[i];
@@ -354,21 +358,22 @@ export default function Dashboard() {
         });
 
         const filename = video.name.replace(/\.[^/.]+$/, '') + `_canva_${String(i + 1).padStart(3, '0')}.webm`;
-        entries.push(createZipEntry(filename, video.outputBlob));
+        zip.file(filename, video.outputBlob);
       }
 
-      const zips = await generateOptimizedZip(entries, {
-        baseFilename: 'videos_processados_webm',
-        signal: conversionAbortRef.current?.signal,
-      });
-
-      downloadZips(zips, 'videos_processados_webm');
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'videos_processados_webm.zip';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
 
       toast({
         title: 'Download concluído!',
-        description: zips.length > 1 
-          ? `${completedVideos.length} vídeo(s) em ${zips.length} arquivos ZIP`
-          : `${completedVideos.length} vídeo(s) incluído(s) no ZIP`,
+        description: `${completedVideos.length} vídeo(s) incluído(s) no ZIP`,
       });
     } catch (error) {
       const isAbort = error instanceof DOMException && error.name === 'AbortError';

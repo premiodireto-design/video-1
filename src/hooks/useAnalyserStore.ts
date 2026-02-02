@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
+import JSZip from 'jszip';
 import { analyserApi } from '@/lib/api/analyser';
-import { generateOptimizedZip, downloadZips, createZipEntry } from '@/lib/zipGenerator';
 import type { 
   AnalyserVideo, 
   VideoFilters, 
@@ -163,12 +163,12 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
     setIsDownloading(true);
     cancelRef.current = false;
 
+    const zip = new JSZip();
     const total = videosToDownload.length;
-    const entries: { filename: string; data: Blob | ArrayBuffer }[] = [];
+    let successCount = 0;
     let failCount = 0;
 
     try {
-      // Phase 1: Collect all video data
       for (let i = 0; i < total; i++) {
         if (cancelRef.current) {
           toast.info('Download cancelado');
@@ -178,7 +178,7 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
         const video = videosToDownload[i];
         
         setDownloadProgress({
-          percentage: Math.round(((i + 1) / total) * 50), // 0-50% for collecting
+          percentage: Math.round(((i + 1) / total) * 100),
           currentItem: i + 1,
           totalItems: total,
           remainingItems: total - i - 1,
@@ -191,14 +191,17 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
 
         try {
           if (video.localFile) {
-            // Use local file directly as Blob (less memory than ArrayBuffer)
-            entries.push(createZipEntry(filename, video.localFile));
+            // Use local file directly
+            const buffer = await video.localFile.arrayBuffer();
+            zip.file(filename, buffer);
+            successCount++;
           } else if (video.videoUrl) {
             // Try to fetch from videoUrl
             const response = await fetch(video.videoUrl);
             if (response.ok) {
-              const blob = await response.blob();
-              entries.push(createZipEntry(filename, blob));
+              const buffer = await response.arrayBuffer();
+              zip.file(filename, buffer);
+              successCount++;
             } else {
               failCount++;
             }
@@ -210,9 +213,9 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
           failCount++;
         }
 
-        // Small delay between downloads to prevent overwhelming network
+        // Small delay between downloads
         if (i < total - 1 && !cancelRef.current) {
-          await new Promise(r => setTimeout(r, 50));
+          await new Promise(r => setTimeout(r, 100));
         }
       }
 
@@ -220,47 +223,36 @@ export function useAnalyserStore(platform: 'tiktok' | 'instagram') {
         return;
       }
 
-      if (entries.length === 0) {
+      if (successCount === 0) {
         toast.error('Nenhum vídeo foi baixado. Os links podem ter expirado.');
         return;
       }
 
-      // Phase 2: Generate ZIP(s) with optimized settings
-      toast.info(`Gerando arquivo ZIP... (${entries.length} vídeos)`);
-      
-      const abortController = new AbortController();
-      const baseFilename = `${platform}-${loadedUsername || 'videos'}-${new Date().toISOString().split('T')[0]}`;
-      
-      const zips = await generateOptimizedZip(entries, {
-        baseFilename,
-        signal: cancelRef.current ? abortController.signal : undefined,
-        onProgress: (current, zipTotal, stage) => {
-          // 50-100% for ZIP generation
-          const baseProgress = 50;
-          const additionalProgress = Math.round((current / zipTotal) * 50);
-          setDownloadProgress({
-            percentage: baseProgress + additionalProgress,
-            currentItem: current,
-            totalItems: zipTotal,
-            remainingItems: zipTotal - current,
-          });
-        },
+      // Generate and download zip
+      toast.info('Gerando arquivo ZIP...');
+      const content = await zip.generateAsync({ 
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 },
       });
 
-      // Download all ZIP files
-      downloadZips(zips, baseFilename);
+      const url = URL.createObjectURL(content);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${platform}-${loadedUsername || 'videos'}-${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
 
-      if (zips.length > 1) {
-        toast.success(`Download concluído! ${entries.length} vídeos em ${zips.length} arquivos ZIP.`);
-      } else if (failCount > 0) {
-        toast.warning(`Download concluído! ${entries.length} de ${total} vídeos baixados.`);
+      if (failCount > 0) {
+        toast.warning(`Download concluído! ${successCount} de ${total} vídeos baixados.`);
       } else {
         toast.success('Download concluído!');
       }
     } catch (error) {
       console.error('Download error:', error);
-      const message = error instanceof Error ? error.message : 'Erro desconhecido';
-      toast.error(`Erro ao criar arquivo ZIP: ${message}`);
+      toast.error('Erro ao criar arquivo zip');
     } finally {
       setIsDownloading(false);
       setDownloadProgress(null);
