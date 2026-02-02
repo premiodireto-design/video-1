@@ -472,11 +472,44 @@ export default function Dashboard() {
       <Header />
       
       <main className="container py-6">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight">Processar Vídeos em Lote</h1>
-          <p className="text-muted-foreground">
-            Crie vídeos profissionais usando seu template do Canva
-          </p>
+        <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Processar Vídeos em Lote</h1>
+            <p className="text-muted-foreground">
+              Crie vídeos profissionais usando seu template do Canva
+            </p>
+          </div>
+          
+          {/* Desktop App Download Banner */}
+          <div className="flex items-center gap-3 p-3 bg-primary/10 border border-primary/20 rounded-lg">
+            <div className="hidden sm:block">
+              <span className="text-sm font-medium">⚡ App Desktop</span>
+              <span className="text-xs text-muted-foreground ml-1">10x mais rápido com GPU</span>
+            </div>
+            <div className="flex gap-2">
+              <a 
+                href="https://github.com/seu-usuario/videotemplate-pro/releases/latest/download/VideoTemplatePro-Setup.exe"
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                download
+              >
+                Windows
+              </a>
+              <a 
+                href="https://github.com/seu-usuario/videotemplate-pro/releases/latest/download/VideoTemplatePro.dmg"
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                download
+              >
+                macOS
+              </a>
+              <a 
+                href="https://github.com/seu-usuario/videotemplate-pro/releases/latest/download/VideoTemplatePro.AppImage"
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                download
+              >
+                Linux
+              </a>
+            </div>
+          </div>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-3">
