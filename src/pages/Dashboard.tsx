@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import JSZip from 'jszip';
 import { Header } from '@/components/layout/Header';
 import { TemplateUpload } from '@/components/template/TemplateUpload';
@@ -11,10 +11,14 @@ import {
   type ProcessingSettings as ProcessingSettingsType,
   type ProcessingProgress
 } from '@/lib/videoProcessor';
-// Cloud processing disabled - FFmpeg.wasm doesn't work in Edge Functions
-// import { processVideoCloud } from '@/lib/cloudProcessor';
 import { convertWebMToMP4, loadFFmpegConverter } from '@/lib/videoConverter';
 import { type GreenArea } from '@/lib/greenDetection';
+import {
+  saveProcessedVideo,
+  getProcessedVideo,
+  getAllStoredVideoIds,
+  cleanupOldVideos,
+} from '@/lib/videoStorage';
 
 export default function Dashboard() {
   const [templateFile, setTemplateFile] = useState<File | null>(null);
@@ -33,6 +37,47 @@ export default function Dashboard() {
   const conversionAbortRef = useRef<AbortController | null>(null);
   const [conversionProgress, setConversionProgress] = useState<{ current: number; total: number; filename: string; mode: 'mp4' | 'webm' | 'init' }>({ current: 0, total: 0, filename: '', mode: 'init' });
   const { toast } = useToast();
+
+  // On mount: cleanup old videos and restore any saved processed videos
+  useEffect(() => {
+    const restoreVideos = async () => {
+      try {
+        // Clean up videos older than 24h
+        await cleanupOldVideos();
+        
+        // Get stored video IDs
+        const storedVideos = await getAllStoredVideoIds();
+        
+        if (storedVideos.length > 0) {
+          // Restore blobs for videos that match current state
+          for (const stored of storedVideos) {
+            const blob = await getProcessedVideo(stored.id);
+            if (blob) {
+              setVideos(prev => {
+                // Check if this video already exists in state
+                const exists = prev.find(v => v.id === stored.id);
+                if (exists && !exists.outputBlob) {
+                  return prev.map(v => 
+                    v.id === stored.id ? { ...v, outputBlob: blob, status: 'completed' as const, progress: 100 } : v
+                  );
+                }
+                return prev;
+              });
+            }
+          }
+          
+          toast({
+            title: 'Vídeos restaurados',
+            description: `${storedVideos.length} vídeo(s) processado(s) recuperado(s)`,
+          });
+        }
+      } catch (error) {
+        console.error('[Dashboard] Failed to restore videos:', error);
+      }
+    };
+    
+    restoreVideos();
+  }, [toast]);
 
   const canProcess = templateFile !== null && greenArea !== null && videos.length > 0;
 
@@ -90,6 +135,9 @@ export default function Dashboard() {
             video.id,
             updateVideoProgress
           );
+
+          // Save to IndexedDB so it persists across refresh
+          await saveProcessedVideo(video.id, video.name, outputBlob);
 
           // Update with output
           setVideos(prev => prev.map(v => 
