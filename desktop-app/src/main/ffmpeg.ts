@@ -126,22 +126,34 @@ export function detectGPU(): GPUInfo {
  * Get encoder-specific flags for best performance
  */
 function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'quality'): string[] {
-  // Use simpler presets for better compatibility across different FFmpeg/driver versions
+  // Optimized presets for speed + quality + smooth playback
   const qualityMap = {
-    fast: { nvenc: 'fast', qsv: 'veryfast', amf: 'speed', x264: 'ultrafast', crf: 28 },
-    balanced: { nvenc: 'medium', qsv: 'faster', amf: 'balanced', x264: 'veryfast', crf: 23 },
-    quality: { nvenc: 'slow', qsv: 'slower', amf: 'quality', x264: 'slow', crf: 18 },
+    fast: { nvenc: 'p4', qsv: 'veryfast', amf: 'speed', x264: 'veryfast', crf: 26 },
+    balanced: { nvenc: 'p5', qsv: 'faster', amf: 'balanced', x264: 'faster', crf: 22 },
+    quality: { nvenc: 'p6', qsv: 'slower', amf: 'quality', x264: 'medium', crf: 18 },
   };
   
   const q = qualityMap[quality];
 
+  // Common flags for smooth playback (constant frame rate, proper GOP)
+  const smoothFlags = [
+    '-vsync', 'cfr',        // Constant frame rate - prevents stutters
+    '-g', '30',             // GOP size = 1 second at 30fps
+    '-bf', '0',             // No B-frames for smoother playback
+  ];
+
   switch (encoder) {
     case 'h264_nvenc':
-      // Simplified NVENC flags for maximum compatibility
+      // Optimized NVENC flags with new preset naming (p1-p7)
       return [
         '-c:v', 'h264_nvenc',
         '-preset', q.nvenc,
+        '-rc', 'vbr',           // Variable bitrate for better quality
         '-cq', String(q.crf),
+        '-b:v', '0',            // Let CQ control quality
+        '-spatial-aq', '1',     // Spatial adaptive quantization
+        '-temporal-aq', '1',    // Temporal adaptive quantization
+        ...smoothFlags,
       ];
     
     case 'h264_qsv':
@@ -149,6 +161,7 @@ function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'qualit
         '-c:v', 'h264_qsv',
         '-preset', q.qsv,
         '-global_quality', String(q.crf),
+        ...smoothFlags,
       ];
     
     case 'h264_amf':
@@ -158,17 +171,18 @@ function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'qualit
         '-rc', 'cqp',
         '-qp_i', String(q.crf),
         '-qp_p', String(q.crf),
+        ...smoothFlags,
       ];
     
     default: // libx264
-      // Use tune=fastdecode for smoother playback
-      // Use threads=0 to auto-detect optimal thread count
       return [
         '-c:v', 'libx264',
         '-preset', q.x264,
         '-crf', String(q.crf),
-        '-tune', 'fastdecode',
+        '-tune', 'film',        // Better for real content vs fastdecode
+        '-x264-params', 'ref=3:bframes=0',  // Optimized for smooth playback
         '-threads', '0',
+        ...smoothFlags,
       ];
   }
 }
