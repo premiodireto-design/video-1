@@ -29,7 +29,7 @@ async function uploadToStorage(
   }
 
   if (!user) {
-    throw new Error('Faça login para usar o processamento na nuvem.');
+    throw new Error('Faça login para usar o processamento na nuvem. Vá em /auth para entrar ou criar conta.');
   }
 
   const timestamp = Date.now();
