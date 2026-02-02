@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: 142 76% 36%;
+  --primary-foreground: 355 7% 97%;
+  --background: 222 47% 11%;
+  --foreground: 213 31% 91%;
+  --muted: 223 47% 16%;
+  --muted-foreground: 218 11% 65%;
+  --accent: 216 34% 17%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 63% 31%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 216 34% 17%;
+  --input: 216 34% 17%;
+  --ring: 142 76% 36%;
+  --radius: 0.5rem;
+}
+
+body {
+  @apply bg-background text-foreground;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-muted;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/30 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/50;
+}
+
+/* Drag and drop zone */
+.drop-zone {
+  @apply border-2 border-dashed border-muted-foreground/30 rounded-xl p-8 text-center transition-colors;
+}
+
+.drop-zone:hover,
+.drop-zone.drag-over {
+  @apply border-primary bg-primary/5;
+}
+
+/* Progress bar animation */
+@keyframes progress-shine {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.progress-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.2),
+    transparent
+  );
+  animation: progress-shine 1.5s infinite;
+}
