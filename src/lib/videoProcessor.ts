@@ -296,9 +296,9 @@ export async function processVideo(
   });
 
   // Set up MediaRecorder (video from canvas + audio from the source video)
-  // For long videos, capturing at a lower FPS significantly reduces CPU/GPU pressure
-  // and helps prevent stalls in decoding/encoding.
-  const targetFps = settings.maxQuality ? 60 : 30;
+  // For faster processing, use lower FPS when maxQuality is false
+  // 24 FPS is sufficient for social media and significantly reduces CPU load
+  const targetFps = settings.maxQuality ? 30 : 24;
   const canvasStream = canvas.captureStream(targetFps);
 
   // We start with the canvas video track, then (after playback starts) we attach an audio track.
@@ -378,8 +378,9 @@ export async function processVideo(
 
   const recorder = new MediaRecorder(combinedStream, {
     mimeType,
-    videoBitsPerSecond: settings.maxQuality ? 12000000 : 8000000,
-    audioBitsPerSecond: 192000,
+    // Lower bitrate in fast mode for quicker encoding
+    videoBitsPerSecond: settings.maxQuality ? 10000000 : 5000000,
+    audioBitsPerSecond: 128000,
   });
 
   const chunks: Blob[] = [];

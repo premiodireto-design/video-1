@@ -11,7 +11,8 @@ import {
   type ProcessingSettings as ProcessingSettingsType,
   type ProcessingProgress
 } from '@/lib/videoProcessor';
-import { processVideoCloud } from '@/lib/cloudProcessor';
+// Cloud processing disabled - FFmpeg.wasm doesn't work in Edge Functions
+// import { processVideoCloud } from '@/lib/cloudProcessor';
 import { convertWebMToMP4, loadFFmpegConverter } from '@/lib/videoConverter';
 import { type GreenArea } from '@/lib/greenDetection';
 
@@ -22,10 +23,10 @@ export default function Dashboard() {
   const [settings, setSettings] = useState<ProcessingSettingsType>({
     fitMode: 'cover',
     normalizeAudio: false,
-    maxQuality: false,
+    maxQuality: false, // false = faster (720p internal render)
     removeBlackBars: false,
     watermark: '',
-    useAiFraming: true, // Enabled by default
+    useAiFraming: false, // Disabled by default for speed (AI analysis is slow)
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
@@ -79,26 +80,16 @@ export default function Dashboard() {
         try {
           let outputBlob: Blob;
           
-          // Use cloud processing if enabled
-          if (settings.useCloudProcessing) {
-            outputBlob = await processVideoCloud(
-              video.file,
-              templateFile,
-              greenArea,
-              settings,
-              video.id,
-              updateVideoProgress
-            );
-          } else {
-            outputBlob = await processVideo(
-              video.file,
-              templateFile,
-              greenArea,
-              settings,
-              video.id,
-              updateVideoProgress
-            );
-          }
+          // Cloud processing is currently disabled (FFmpeg.wasm doesn't work in Edge Functions)
+          // Always use local processing
+          outputBlob = await processVideo(
+            video.file,
+            templateFile,
+            greenArea,
+            settings,
+            video.id,
+            updateVideoProgress
+          );
 
           // Update with output
           setVideos(prev => prev.map(v => 
@@ -130,9 +121,9 @@ export default function Dashboard() {
           console.log(`Pulando vídeo ${video.name} devido a erro. Continuando...`);
         }
         
-        // Small delay between videos to let browser recover resources
+        // Minimal delay between videos (just enough for GC)
         if (i < videosToProcess.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+          await new Promise(resolve => setTimeout(resolve, 100));
         }
       }
 
