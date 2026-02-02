@@ -81,13 +81,15 @@ export function detectGPU(): GPUInfo {
   let hasIntelQSV = false;
   let hasAMD = false;
 
-  const canUseEncoder = (encoder: 'h264_nvenc' | 'h264_qsv' | 'h264_amf') => {
+  console.log('[GPU] Starting GPU detection...');
+
+  const canUseEncoder = (encoder: 'h264_nvenc' | 'h264_qsv' | 'h264_amf'): boolean => {
     // Many FFmpeg builds list GPU encoders even when the machine/driver can't actually use them.
     // Do a tiny smoke-test encode against a generated source.
     const args = [
       '-hide_banner',
       '-loglevel',
-      'error',
+      'warning', // Use warning instead of error to see more output
       '-f',
       'lavfi',
       '-i',
@@ -100,21 +102,57 @@ export function detectGPU(): GPUInfo {
       'null',
       '-',
     ];
-    const res = spawnSync(ffmpegPath, args, {
-      windowsHide: true,
-      timeout: 8000,
-      encoding: 'utf8',
-    });
-    return res.status === 0;
+    
+    console.log(`[GPU] Testing encoder: ${encoder}`);
+    
+    try {
+      const res = spawnSync(ffmpegPath, args, {
+        windowsHide: true,
+        timeout: 15000, // Increased timeout for slower GPUs
+        encoding: 'utf8',
+      });
+      
+      const stderr = res.stderr || '';
+      const stdout = res.stdout || '';
+      
+      console.log(`[GPU] ${encoder} exit code: ${res.status}`);
+      if (stderr) {
+        console.log(`[GPU] ${encoder} stderr: ${stderr.slice(0, 300)}`);
+      }
+      
+      // Check for specific failure messages even if exit code is 0
+      const lowerErr = stderr.toLowerCase();
+      const hasInitError = 
+        lowerErr.includes('cannot load') ||
+        lowerErr.includes('no nvenc capable') ||
+        lowerErr.includes('driver does not support') ||
+        lowerErr.includes('mfxinit') ||
+        lowerErr.includes('amf') && lowerErr.includes('failed');
+      
+      if (hasInitError) {
+        console.log(`[GPU] ${encoder} has init errors in stderr, marking as unavailable`);
+        return false;
+      }
+      
+      const success = res.status === 0;
+      console.log(`[GPU] ${encoder} available: ${success}`);
+      return success;
+    } catch (err) {
+      console.log(`[GPU] ${encoder} test threw exception:`, err);
+      return false;
+    }
   };
 
   try {
     // 1) Check which encoders exist in the FFmpeg build
-    const output = execSync(`${ffmpegPath} -hide_banner -encoders`, { encoding: 'utf8' });
+    console.log('[GPU] Checking FFmpeg encoders list...');
+    const output = execSync(`"${ffmpegPath}" -hide_banner -encoders`, { encoding: 'utf8' });
 
     const hasNvencInBuild = output.includes('h264_nvenc');
     const hasQsvInBuild = output.includes('h264_qsv');
     const hasAmfInBuild = output.includes('h264_amf');
+
+    console.log(`[GPU] Encoders in build - NVENC: ${hasNvencInBuild}, QSV: ${hasQsvInBuild}, AMF: ${hasAmfInBuild}`);
 
     // 2) Verify they actually work on this machine
     if (hasNvencInBuild && canUseEncoder('h264_nvenc')) {
@@ -135,7 +173,7 @@ export function detectGPU(): GPUInfo {
     // Always add CPU encoder as fallback
     encoders.push('libx264');
   } catch (error) {
-    console.error('Failed to detect GPU:', error);
+    console.error('[GPU] Failed to detect GPU:', error);
     encoders.push('libx264');
   }
 
@@ -144,6 +182,10 @@ export function detectGPU(): GPUInfo {
   if (hasNvidia) recommendedEncoder = 'h264_nvenc';
   else if (hasIntelQSV) recommendedEncoder = 'h264_qsv';
   else if (hasAMD) recommendedEncoder = 'h264_amf';
+
+  console.log(`[GPU] Detection complete - NVIDIA: ${hasNvidia}, Intel: ${hasIntelQSV}, AMD: ${hasAMD}`);
+  console.log(`[GPU] Recommended encoder: ${recommendedEncoder}`);
+  console.log(`[GPU] Available encoders: ${encoders.join(', ')}`);
 
   return {
     hasNvidia,
@@ -380,27 +422,39 @@ export function processVideo(
       const targetAspect = width / height;
       const margin = 2; // Safety margin to hide green edge pixels
 
+      // Expand target dimensions slightly to ensure complete coverage (avoid any black borders)
+      const expandedWidth = width + (margin * 2);
+      const expandedHeight = height + (margin * 2);
+      const expandedAspect = expandedWidth / expandedHeight;
+
+      // Build the scaling expression for TRUE cover mode:
+      // 1. Compare source aspect ratio with target aspect ratio
+      // 2. If source is wider than target, scale to fill HEIGHT (video will be wider than needed)
+      // 3. If source is taller than target, scale to fill WIDTH (video will be taller than needed)
+      // 4. This guarantees the scaled video is >= target in BOTH dimensions
+      const scaleExpr = `scale=w='if(gt(a,${expandedAspect}),max(${expandedWidth},ceil(${expandedHeight}*a/2)*2),${expandedWidth})':h='if(gt(a,${expandedAspect}),${expandedHeight},max(${expandedHeight},ceil(${expandedWidth}/a/2)*2))':force_original_aspect_ratio=increase`;
+
       // Calculate crop position based on AI anchor points
       // anchorX: 0=left, 0.5=center, 1=right
       // anchorY: 0=top, 0.5=center, 1=bottom
       // For FFmpeg crop: crop=w:h:x:y where x and y are the top-left corner of the crop area
       // When anchorY=0 (top), we want y=0 (keep top)
       // When anchorY=1 (bottom), we want y=(ih-height) (keep bottom)
-      const cropX = `(iw-${width})*${aiOffsetX}`;
-      const cropY = `(ih-${height})*${aiOffsetY}`;
+      // Use max(0,...) and min to prevent negative or out-of-bounds values
+      const cropX = `max(0,min(iw-${expandedWidth},(iw-${expandedWidth})*${aiOffsetX}))`;
+      const cropY = `max(0,min(ih-${expandedHeight},(ih-${expandedHeight})*${aiOffsetY}))`;
 
       const filterComplex = [
-        // Scale video to cover the green area (true cover mode)
-        // If the input is wider than target => fit height; else => fit width.
-        // Then crop using AI-determined anchor points
+        // Scale video to cover the green area (true cover mode with overflow)
+        // Then crop to exact size using AI-determined anchor points
         // Also convert colorspace to sRGB for consistency with template
-        `[0:v]scale=w='if(gt(a,${targetAspect}),-1,${width})':h='if(gt(a,${targetAspect}),${height},-1)',crop=${width}:${height}:${cropX}:${cropY},setsar=1,format=rgb24[vid]`,
+        `[0:v]${scaleExpr},crop=${expandedWidth}:${expandedHeight}:${cropX}:${cropY},setsar=1,format=rgb24[vid]`,
         // Template with chroma key - use tighter tolerance for cleaner edges
         `[1:v]scale=1080:1920,format=rgb24,chromakey=0x00FF00:0.25:0.08[mask]`,
         // Infinite black background
         `color=black:s=1080x1920[bg]`,
-        // Overlay video in green area with margin (slightly inward to hide edges)
-        `[bg][vid]overlay=${x + margin}:${y + margin}:shortest=1[base]`,
+        // Overlay video in green area (slightly oversized to cover completely with margin overlap)
+        `[bg][vid]overlay=${x}:${y}:shortest=1[base]`,
         // Overlay template on top
         `[base][mask]overlay=0:0:shortest=1,format=yuv420p[out]`,
       ].join(';');
