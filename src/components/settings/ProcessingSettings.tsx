@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 // NOTE: Cloud processing is currently disabled because FFmpeg.wasm does not work in Edge Functions (requires Web Workers).
 import { Label } from '@/components/ui/label';
@@ -14,6 +15,14 @@ interface ProcessingSettingsProps {
 }
 
 export function ProcessingSettings({ settings, onSettingsChange, disabled }: ProcessingSettingsProps) {
+  // Cloud processing is currently unavailable; ensure we never keep this flag enabled.
+  useEffect(() => {
+    if (settings.useCloudProcessing) {
+      onSettingsChange({ ...settings, useCloudProcessing: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.useCloudProcessing]);
+
   return (
     <Card className="border-border/50">
       <CardHeader>
