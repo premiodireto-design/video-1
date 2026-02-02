@@ -88,9 +88,66 @@ export async function processVideo(
   
   const videoUrl = URL.createObjectURL(videoFile);
   
+  // Aguardar vídeo carregar com timeout e verificação robusta
+  const VIDEO_LOAD_TIMEOUT = 30_000; // 30s para carregar
   await new Promise<void>((res, rej) => {
-    video.oncanplaythrough = () => res();
-    video.onerror = () => rej(new Error('Erro ao carregar vídeo'));
+    let resolved = false;
+    
+    const loadTimeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        rej(new Error('Timeout: vídeo demorou demais para carregar (30s). Pode estar corrompido ou ser um formato não suportado.'));
+      }
+    }, VIDEO_LOAD_TIMEOUT);
+    
+    const checkReady = async () => {
+      // Verificar se o vídeo tem dimensões válidas (indica que frames foram decodificados)
+      if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 3) {
+        // Tentar renderizar um frame no canvas para confirmar que está decodificável
+        try {
+          const testCanvas = document.createElement('canvas');
+          testCanvas.width = 16;
+          testCanvas.height = 16;
+          const testCtx = testCanvas.getContext('2d');
+          if (testCtx) {
+            testCtx.drawImage(video, 0, 0, 16, 16);
+            // Se chegou aqui sem erro, o vídeo está pronto
+            if (!resolved) {
+              resolved = true;
+              clearTimeout(loadTimeout);
+              res();
+            }
+            return;
+          }
+        } catch (e) {
+          console.warn('[VideoProcessor] Frame test failed, waiting more...', e);
+        }
+      }
+      
+      // Continuar verificando a cada 200ms até estar pronto
+      if (!resolved) {
+        setTimeout(checkReady, 200);
+      }
+    };
+    
+    video.oncanplaythrough = () => {
+      // Esperar mais um pouco e depois verificar se realmente tem frames
+      setTimeout(checkReady, 100);
+    };
+    
+    video.onerror = () => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(loadTimeout);
+        rej(new Error('Erro ao carregar vídeo: formato não suportado ou arquivo corrompido'));
+      }
+    };
+    
+    // Também verificar se já está pronto (caso eventos já tenham disparado)
+    video.onloadeddata = () => {
+      setTimeout(checkReady, 100);
+    };
+    
     video.src = videoUrl;
     video.load();
   });
