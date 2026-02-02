@@ -77,6 +77,10 @@ export async function processVideo(
   video.muted = false; // Must be false for AudioContext capture to work
   video.volume = 0.001; // Near-silent but not muted (allows audio capture)
   
+  // For PiP: we need the video to be in the DOM (but invisible)
+  video.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;pointer-events:none;opacity:0;';
+  document.body.appendChild(video);
+  
   const videoUrl = URL.createObjectURL(videoFile);
   
   await new Promise<void>((res, rej) => {
@@ -517,6 +521,52 @@ export async function processVideo(
   };
 
   // Cleanup function to stop all intervals
+  // Track PiP and background interval
+  let pipWindow: PictureInPictureWindow | null = null;
+  let backgroundRenderInterval: ReturnType<typeof setInterval> | null = null;
+  
+  // Try to enter PiP to keep video playing in background
+  const tryEnterPiP = async () => {
+    try {
+      if (document.pictureInPictureEnabled && !document.pictureInPictureElement) {
+        pipWindow = await video.requestPictureInPicture();
+        console.log('[VideoProcessor] Entered PiP mode for background processing');
+      }
+    } catch (e) {
+      console.log('[VideoProcessor] PiP not available:', e);
+    }
+  };
+  
+  const exitPiP = async () => {
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      }
+    } catch {}
+    pipWindow = null;
+  };
+  
+  // Use setInterval as fallback for background rendering (less throttled than rAF)
+  const startBackgroundRender = () => {
+    // 30fps = ~33ms interval
+    backgroundRenderInterval = setInterval(() => {
+      if (!isRecording) {
+        if (backgroundRenderInterval) {
+          clearInterval(backgroundRenderInterval);
+          backgroundRenderInterval = null;
+        }
+        return;
+      }
+      
+      // Only render if page is hidden (rAF handles visible state)
+      if (document.hidden) {
+        try {
+          renderFrame();
+        } catch {}
+      }
+    }, 33);
+  };
+
   const cleanup = () => {
     if (stallCheckInterval) {
       clearInterval(stallCheckInterval);
@@ -526,6 +576,16 @@ export async function processVideo(
       clearInterval(flushInterval);
       flushInterval = null;
     }
+    if (backgroundRenderInterval) {
+      clearInterval(backgroundRenderInterval);
+      backgroundRenderInterval = null;
+    }
+    // Exit PiP if active
+    void exitPiP();
+    // Remove video from DOM
+    try {
+      video.remove();
+    } catch {}
   };
 
   return new Promise<Blob>((resolve, reject) => {
@@ -628,6 +688,13 @@ export async function processVideo(
       // Start periodic buffer flush
       startBufferFlush();
       
+      // Start background render interval (for when tab is hidden)
+      startBackgroundRender();
+      
+      // Try to enter PiP for background processing
+      // This keeps the video playing even when tab is in background
+      void tryEnterPiP();
+      
       // Prime the canvas with a frame before starting the loop
       try {
         renderFrame();
@@ -635,7 +702,7 @@ export async function processVideo(
       
       scheduleFrames();
     }).catch((err2) => {
-      if (stallCheckInterval) clearInterval(stallCheckInterval);
+      cleanup();
       reject(new Error('Não foi possível reproduzir o vídeo: ' + err2.message));
     });
   });
