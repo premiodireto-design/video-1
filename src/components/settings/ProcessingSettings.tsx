@@ -3,7 +3,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Input } from '@/components/ui/input';
-import { Settings, Crop, Square, Volume2, Sparkles, Scissors, AtSign, Brain } from 'lucide-react';
+import { Settings, Crop, Square, Volume2, Sparkles, Scissors, AtSign, Brain, Cloud, Zap } from 'lucide-react';
 import type { ProcessingSettings as ProcessingSettingsType } from '@/lib/videoProcessor';
 
 interface ProcessingSettingsProps {
@@ -132,6 +132,29 @@ export function ProcessingSettings({ settings, onSettingsChange, disabled }: Pro
             />
           </div>
 
+          <div className="flex items-center justify-between p-3 rounded-lg border bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border-cyan-500/30">
+            <div className="flex items-center gap-3">
+              <Cloud className="h-4 w-4 text-cyan-500" />
+              <div>
+                <Label htmlFor="cloud-processing" className="font-medium cursor-pointer flex items-center gap-2">
+                  Processar na nuvem
+                  <Zap className="h-3 w-3 text-yellow-500" />
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  5-10x mais rápido! Usa servidor FFmpeg (requer upload)
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="cloud-processing"
+              checked={settings.useCloudProcessing ?? false}
+              onCheckedChange={(checked) => 
+                onSettingsChange({ ...settings, useCloudProcessing: checked })
+              }
+              disabled={disabled}
+            />
+          </div>
+
           <div className="flex items-center justify-between p-3 rounded-lg border bg-gradient-to-r from-purple-500/10 to-blue-500/10 border-purple-500/30">
             <div className="flex items-center gap-3">
               <Brain className="h-4 w-4 text-purple-500" />
@@ -150,7 +173,7 @@ export function ProcessingSettings({ settings, onSettingsChange, disabled }: Pro
               onCheckedChange={(checked) => 
                 onSettingsChange({ ...settings, useAiFraming: checked })
               }
-              disabled={disabled}
+              disabled={disabled || settings.useCloudProcessing}
             />
           </div>
         </div>

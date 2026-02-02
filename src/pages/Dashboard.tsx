@@ -11,6 +11,7 @@ import {
   type ProcessingSettings as ProcessingSettingsType,
   type ProcessingProgress
 } from '@/lib/videoProcessor';
+import { processVideoCloud } from '@/lib/cloudProcessor';
 import { convertWebMToMP4, loadFFmpegConverter } from '@/lib/videoConverter';
 import { type GreenArea } from '@/lib/greenDetection';
 
@@ -76,14 +77,28 @@ export default function Dashboard() {
         ));
 
         try {
-          const outputBlob = await processVideo(
-            video.file,
-            templateFile,
-            greenArea,
-            settings,
-            video.id,
-            updateVideoProgress
-          );
+          let outputBlob: Blob;
+          
+          // Use cloud processing if enabled
+          if (settings.useCloudProcessing) {
+            outputBlob = await processVideoCloud(
+              video.file,
+              templateFile,
+              greenArea,
+              settings,
+              video.id,
+              updateVideoProgress
+            );
+          } else {
+            outputBlob = await processVideo(
+              video.file,
+              templateFile,
+              greenArea,
+              settings,
+              video.id,
+              updateVideoProgress
+            );
+          }
 
           // Update with output
           setVideos(prev => prev.map(v => 
