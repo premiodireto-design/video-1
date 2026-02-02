@@ -405,13 +405,30 @@ export function processVideo(
         `[base][mask]overlay=0:0:shortest=1,format=yuv420p[out]`,
       ].join(';');
 
-    // Get encoder-specific flags
-    const pickEncoder = (useGpu: boolean) => (useGpu ? settings.encoder : 'libx264');
-    const buildEncoderFlags = (useGpu: boolean) =>
-      getEncoderFlags(pickEncoder(useGpu), settings.quality);
+    // Build ordered list of encoders to try: GPU options first (if enabled), then CPU fallback
+    const encodersToTry: string[] = [];
+    if (settings.useGPU) {
+      // Get the list of encoders that actually work on this machine (already validated with smoke tests)
+      const gpuInfo = detectGPU();
+      // Add all working GPU encoders in priority order
+      if (gpuInfo.hasNvidia) encodersToTry.push('h264_nvenc');
+      if (gpuInfo.hasIntelQSV) encodersToTry.push('h264_qsv');
+      if (gpuInfo.hasAMD) encodersToTry.push('h264_amf');
+    }
+    // Always add CPU as final fallback
+    encodersToTry.push('libx264');
 
-    const runOnce = (useGpu: boolean) => {
-      const encoderFlags = buildEncoderFlags(useGpu);
+    console.log('[FFmpeg] Encoders to try (in order):', encodersToTry);
+
+    const runWithEncoder = (encoder: string) => {
+      const encoderFlags = getEncoderFlags(encoder, settings.quality);
+      const isGpuEncoder = encoder !== 'libx264';
+      const encoderLabel = {
+        'h264_nvenc': 'NVIDIA',
+        'h264_qsv': 'Intel',
+        'h264_amf': 'AMD',
+        'libx264': 'CPU',
+      }[encoder] || encoder;
 
       // Build FFmpeg command
       const args = [
@@ -432,6 +449,7 @@ export function processVideo(
         outputPath,
       ];
 
+      console.log(`[FFmpeg] Trying encoder: ${encoder}`);
       console.log('[FFmpeg] Command:', ffmpegPath, args.join(' '));
       const ffmpeg = spawn(ffmpegPath, args);
       let duration = 0;
@@ -471,18 +489,18 @@ export function processVideo(
             videoPath,
             progress,
             stage: 'processing',
-            message: `Processando... ${progress}%${useGpu ? ' (GPU)' : ' (CPU)'}`,
+            message: `Processando... ${progress}% (${encoderLabel})`,
             fps: fpsMatch ? parseFloat(fpsMatch[1]) : undefined,
             speed: speedMatch ? `${speedMatch[1]}x` : undefined,
           });
         }
       });
 
-      return new Promise<{ code: number | null; stderrTail: string; stderrAll: string }>((res) => {
+      return new Promise<{ code: number | null; stderrTail: string; stderrAll: string; encoder: string }>((res) => {
         ffmpeg.on('close', (code) => {
           const stderrAll = stderrLines.join('\n');
           const stderrTail = stderrLines.slice(-25).join('\n');
-          res({ code, stderrTail, stderrAll });
+          res({ code, stderrTail, stderrAll, encoder });
         });
 
         ffmpeg.on('error', (error) => {
@@ -490,73 +508,105 @@ export function processVideo(
           const stderrTail = stderrLines.slice(-25).join('\n');
           // Use -1 to represent spawn-level errors
           console.error('[FFmpeg] spawn error:', error);
-          res({ code: -1, stderrTail, stderrAll: `${stderrAll}\n${error.message}`.trim() });
+          res({ code: -1, stderrTail, stderrAll: `${stderrAll}\n${error.message}`.trim(), encoder });
         });
       });
     };
 
-      // First attempt: respect user setting
-      const firstUseGpu = !!settings.useGPU;
-      const first = await runOnce(firstUseGpu);
+    const isEncoderInitFailure = (stderr: string) => {
+      const s = stderr.toLowerCase();
+      return (
+        // NVENC failures
+        s.includes('cannot load nvcuda.dll') ||
+        s.includes('no nvenc capable devices found') ||
+        s.includes('driver does not support the required nvenc api version') ||
+        s.includes('minimum required nvidia driver') ||
+        s.includes('nvenc api version') ||
+        // Generic encoder failures
+        s.includes('error while opening encoder') ||
+        s.includes('could not open encoder') ||
+        s.includes('encoder not found') ||
+        s.includes('unknown encoder') ||
+        // Intel QSV failures
+        s.includes('mfxinit') ||
+        s.includes('qsvinit') ||
+        (s.includes('qsv') && s.includes('failed')) ||
+        // AMD AMF failures
+        (s.includes('amf') && (s.includes('failed') || s.includes('error') || s.includes('init')))
+      );
+    };
 
-      if (first.code === 0) {
+    // Try each encoder in order until one succeeds
+    let lastResult: { code: number | null; stderrTail: string; stderrAll: string; encoder: string } | null = null;
+
+    for (let i = 0; i < encodersToTry.length; i++) {
+      const encoder = encodersToTry[i];
+      const isLastEncoder = i === encodersToTry.length - 1;
+      const encoderLabel = {
+        'h264_nvenc': 'NVIDIA',
+        'h264_qsv': 'Intel',
+        'h264_amf': 'AMD',
+        'libx264': 'CPU',
+      }[encoder] || encoder;
+
+      onProgress({
+        videoPath,
+        progress: 0,
+        stage: 'processing',
+        message: `Iniciando processamento (${encoderLabel})...`,
+      });
+
+      const result = await runWithEncoder(encoder);
+      lastResult = result;
+
+      if (result.code === 0) {
+        // Success!
         onProgress({
           videoPath,
           progress: 100,
           stage: 'done',
-          message: 'Concluído!',
+          message: `Concluído! (${encoderLabel})`,
         });
         resolve({ success: true, outputPath });
         return;
       }
 
-       // If GPU encoding fails (missing drivers / unsupported GPU / encoder init failure), auto-fallback to CPU.
-       // This is critical to make the app work on *any* PC.
-       const attemptedGpuEncoder = firstUseGpu && pickEncoder(true) !== 'libx264';
-       if (attemptedGpuEncoder && isGpuEncoderInitIssue(first.stderrAll)) {
+      // Check if it's an encoder init failure - if so, try next encoder
+      if (!isLastEncoder && isEncoderInitFailure(result.stderrAll)) {
+        const nextEncoder = encodersToTry[i + 1];
+        const nextLabel = {
+          'h264_nvenc': 'NVIDIA',
+          'h264_qsv': 'Intel',
+          'h264_amf': 'AMD',
+          'libx264': 'CPU',
+        }[nextEncoder] || nextEncoder;
+
+        console.log(`[FFmpeg] Encoder ${encoder} failed, trying ${nextEncoder}...`);
         onProgress({
           videoPath,
           progress: 0,
           stage: 'processing',
-           message: 'GPU indisponível/incompatível. Reprocessando no CPU...',
+          message: `${encoderLabel} indisponível. Tentando ${nextLabel}...`,
         });
-
-        const second = await runOnce(false);
-        if (second.code === 0) {
-          onProgress({
-            videoPath,
-            progress: 100,
-            stage: 'done',
-            message: 'Concluído! (CPU)',
-          });
-          resolve({ success: true, outputPath });
-          return;
-        }
-
-        const hint2 = second.stderrTail
-          ? `\n\n--- FFmpeg stderr (últimas linhas) ---\n${second.stderrTail}`
-          : '';
-        onProgress({
-          videoPath,
-          progress: 0,
-          stage: 'error',
-          message: `FFmpeg saiu com código ${second.code}${hint2}`,
-        });
-        resolve({ success: false, error: `FFmpeg exit code: ${second.code}${hint2}` });
-        return;
+        continue;
       }
 
-      const hint = first.stderrTail
-        ? `\n\n--- FFmpeg stderr (últimas linhas) ---\n${first.stderrTail}`
-        : '';
+      // For other errors (not encoder init), or if it's the last encoder, fail
+      break;
+    }
 
-      onProgress({
-        videoPath,
-        progress: 0,
-        stage: 'error',
-        message: `FFmpeg saiu com código ${first.code}${hint}`,
-      });
-      resolve({ success: false, error: `FFmpeg exit code: ${first.code}${hint}` });
+    // All encoders failed
+    const hint = lastResult?.stderrTail
+      ? `\n\n--- FFmpeg stderr (últimas linhas) ---\n${lastResult.stderrTail}`
+      : '';
+
+    onProgress({
+      videoPath,
+      progress: 0,
+      stage: 'error',
+      message: `FFmpeg saiu com código ${lastResult?.code}${hint}`,
+    });
+    resolve({ success: false, error: `FFmpeg exit code: ${lastResult?.code}${hint}` });
     })();
   });
 }
