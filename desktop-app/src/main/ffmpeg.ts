@@ -2,6 +2,7 @@ import { spawn, execSync } from 'child_process';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { app } from 'electron';
+import { extractFirstFrame, analyzeVideoFrame, calculateSmartPosition, getDefaultAnalysis, type FrameAnalysis } from './aiFraming';
 
 export interface GPUInfo {
   hasNvidia: boolean;
@@ -173,6 +174,47 @@ function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'qualit
 }
 
 /**
+ * Get video dimensions using FFprobe
+ */
+async function getVideoDimensions(videoPath: string): Promise<{ width: number; height: number }> {
+  const ffmpegPath = getFFmpegPath();
+  const ffprobePath = ffmpegPath.replace(/ffmpeg(\.exe)?$/, 'ffprobe$1');
+
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height',
+      '-of', 'csv=p=0',
+      videoPath,
+    ];
+
+    let stdout = '';
+    const ffprobe = spawn(ffprobePath, args);
+
+    ffprobe.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    ffprobe.on('close', (code) => {
+      if (code === 0 && stdout.trim()) {
+        const [width, height] = stdout.trim().split(',').map(Number);
+        if (width && height) {
+          resolve({ width, height });
+          return;
+        }
+      }
+      // Fallback to common dimensions if ffprobe fails
+      resolve({ width: 1920, height: 1080 });
+    });
+
+    ffprobe.on('error', () => {
+      resolve({ width: 1920, height: 1080 });
+    });
+  });
+}
+
+/**
  * Process a video with FFmpeg using GPU acceleration
  */
 export function processVideo(
@@ -187,6 +229,7 @@ export function processVideo(
       quality: 'fast' | 'balanced' | 'quality';
       trimStart: number;
       trimEnd: number;
+      useAiFraming?: boolean; // NEW: Use AI to detect faces and position video
     };
   },
   onProgress: (progress: ProcessingProgress) => void
@@ -205,37 +248,103 @@ export function processVideo(
       );
     };
 
-    onProgress({
-      videoPath,
-      progress: 0,
-      stage: 'analyzing',
-      message: 'Analisando vídeo...',
-    });
+    // Run the async processing logic
+    (async () => {
+      let frameAnalysis: FrameAnalysis | null = null;
+      let aiOffsetX = 0;
+      let aiOffsetY = 0;
 
-    // Build filter complex for chroma key + overlay
-    // IMPORTANT:
-    // - Template PNG must have transparent pixels where the video should appear (green area).
-    // - We overlay the video first on a black background, then overlay the template on top.
-    // - The template's green pixels are removed via chromakey, revealing the video below.
-    // - Apply margin (2px) to avoid green edge artifacts.
-    const targetAspect = width / height;
-    const margin = 2; // Safety margin to hide green edge pixels
+      // If AI framing is enabled, analyze the first frame
+      if (settings.useAiFraming) {
+        onProgress({
+          videoPath,
+          progress: 0,
+          stage: 'analyzing',
+          message: 'Analisando vídeo com IA...',
+        });
 
-    const filterComplex = [
-      // Scale video to cover the green area (true cover mode)
-      // If the input is wider than target => fit height; else => fit width.
-      // Then center-crop both axes to avoid invalid crop sizes.
-      // Also convert colorspace to sRGB for consistency with template
-      `[0:v]scale=w='if(gt(a,${targetAspect}),-1,${width})':h='if(gt(a,${targetAspect}),${height},-1)',crop=${width}:${height}:(iw-${width})/2:(ih-${height})/2,setsar=1,format=rgb24[vid]`,
-      // Template with chroma key - use tighter tolerance for cleaner edges
-      `[1:v]scale=1080:1920,format=rgb24,chromakey=0x00FF00:0.25:0.08[mask]`,
-      // Infinite black background
-      `color=black:s=1080x1920[bg]`,
-      // Overlay video in green area with margin (slightly inward to hide edges)
-      `[bg][vid]overlay=${x + margin}:${y + margin}:shortest=1[base]`,
-      // Overlay template on top
-      `[base][mask]overlay=0:0:shortest=1,format=yuv420p[out]`,
-    ].join(';');
+        try {
+          // Get video dimensions first
+          const videoDims = await getVideoDimensions(videoPath);
+          console.log('[FFmpeg] Video dimensions:', videoDims);
+
+          // Extract and analyze first frame
+          const frameBase64 = await extractFirstFrame(videoPath);
+          frameAnalysis = await analyzeVideoFrame(frameBase64);
+          console.log('[FFmpeg] AI analysis result:', frameAnalysis);
+
+          // Calculate smart positioning
+          const smartPos = calculateSmartPosition(
+            videoDims.width,
+            videoDims.height,
+            width,
+            height,
+            frameAnalysis
+          );
+
+          // For FFmpeg, we need to calculate the crop offset based on AI anchor points
+          // The smart position gives us pixel offsets, but we need to convert to FFmpeg crop expression
+          // The anchorX/Y values (0-1) determine where to crop from
+          aiOffsetX = frameAnalysis.suggestedCrop.anchorX;
+          aiOffsetY = frameAnalysis.suggestedCrop.anchorY;
+
+          onProgress({
+            videoPath,
+            progress: 5,
+            stage: 'analyzing',
+            message: frameAnalysis.hasFace
+              ? 'Rosto detectado! Enquadrando...'
+              : 'Conteúdo analisado! Enquadrando...',
+          });
+        } catch (aiError) {
+          console.warn('[FFmpeg] AI analysis failed, using center crop:', aiError);
+          aiOffsetX = 0.5;
+          aiOffsetY = 0.15; // Default top-aligned for talking heads
+        }
+      } else {
+        onProgress({
+          videoPath,
+          progress: 0,
+          stage: 'analyzing',
+          message: 'Analisando vídeo...',
+        });
+        aiOffsetX = 0.5;
+        aiOffsetY = 0.5; // Center crop when AI is disabled
+      }
+
+      // Build filter complex for chroma key + overlay
+      // IMPORTANT:
+      // - Template PNG must have transparent pixels where the video should appear (green area).
+      // - We overlay the video first on a black background, then overlay the template on top.
+      // - The template's green pixels are removed via chromakey, revealing the video below.
+      // - Apply margin (2px) to avoid green edge artifacts.
+      const targetAspect = width / height;
+      const margin = 2; // Safety margin to hide green edge pixels
+
+      // Calculate crop position based on AI anchor points
+      // anchorX: 0=left, 0.5=center, 1=right
+      // anchorY: 0=top, 0.5=center, 1=bottom
+      // For FFmpeg crop: crop=w:h:x:y where x and y are the top-left corner of the crop area
+      // When anchorY=0 (top), we want y=0 (keep top)
+      // When anchorY=1 (bottom), we want y=(ih-height) (keep bottom)
+      const cropX = `(iw-${width})*${aiOffsetX}`;
+      const cropY = `(ih-${height})*${aiOffsetY}`;
+
+      const filterComplex = [
+        // Scale video to cover the green area (true cover mode)
+        // If the input is wider than target => fit height; else => fit width.
+        // Then crop using AI-determined anchor points
+        // Also convert colorspace to sRGB for consistency with template
+        `[0:v]scale=w='if(gt(a,${targetAspect}),-1,${width})':h='if(gt(a,${targetAspect}),${height},-1)',crop=${width}:${height}:${cropX}:${cropY},setsar=1,format=rgb24[vid]`,
+        // Template with chroma key - use tighter tolerance for cleaner edges
+        `[1:v]scale=1080:1920,format=rgb24,chromakey=0x00FF00:0.25:0.08[mask]`,
+        // Infinite black background
+        `color=black:s=1080x1920[bg]`,
+        // Overlay video in green area with margin (slightly inward to hide edges)
+        `[bg][vid]overlay=${x + margin}:${y + margin}:shortest=1[base]`,
+        // Overlay template on top
+        `[base][mask]overlay=0:0:shortest=1,format=yuv420p[out]`,
+      ].join(';');
 
     // Get encoder-specific flags
     const pickEncoder = (useGpu: boolean) => (useGpu ? settings.encoder : 'libx264');
@@ -327,7 +436,6 @@ export function processVideo(
       });
     };
 
-    (async () => {
       // First attempt: respect user setting
       const firstUseGpu = !!settings.useGPU;
       const first = await runOnce(firstUseGpu);

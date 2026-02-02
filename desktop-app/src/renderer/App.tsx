@@ -25,6 +25,7 @@ export default function App() {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [useGPU, setUseGPU] = useState(true);
+  const [useAiFraming, setUseAiFraming] = useState(true); // AI framing enabled by default
   const [quality, setQuality] = useState<'fast' | 'balanced' | 'quality'>('balanced');
 
   // Green area (hardcoded for now - could be detected from template)
@@ -104,6 +105,7 @@ export default function App() {
             quality,
             trimStart: 0.5,
             trimEnd: 0.5,
+            useAiFraming, // Pass AI framing setting
           },
         });
       } catch (error) {
@@ -149,6 +151,15 @@ export default function App() {
               disabled={!gpuInfo?.hasNvidia && !gpuInfo?.hasIntelQSV && !gpuInfo?.hasAMD}
             />
             <span className="text-sm">Usar GPU</span>
+          </label>
+          <label className="flex items-center gap-2 ml-4">
+            <input
+              type="checkbox"
+              checked={useAiFraming}
+              onChange={(e) => setUseAiFraming(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm">🧠 IA Framing</span>
           </label>
         </div>
       </div>
