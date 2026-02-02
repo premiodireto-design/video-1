@@ -58,6 +58,11 @@ export async function processVideo(
   videoId: string,
   onProgress: ProgressCallback
 ): Promise<Blob> {
+  // Timeout de 3 minutos para vídeos travados
+  const PROCESSING_TIMEOUT = 3 * 60 * 1000;
+  let processingTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  let isTimedOut = false;
+  
   onProgress({
     videoId,
     progress: 5,
@@ -528,12 +533,13 @@ export async function processVideo(
   // Try to enter PiP to keep video playing in background
   const tryEnterPiP = async () => {
     try {
-      if (document.pictureInPictureEnabled && !document.pictureInPictureElement) {
+      // Only try PiP if video actually has video tracks
+      if (document.pictureInPictureEnabled && !document.pictureInPictureElement && video.videoWidth > 0) {
         pipWindow = await video.requestPictureInPicture();
         console.log('[VideoProcessor] Entered PiP mode for background processing');
       }
     } catch (e) {
-      console.log('[VideoProcessor] PiP not available:', e);
+      // Silent: PiP is optional, not critical
     }
   };
   
@@ -638,6 +644,11 @@ export async function processVideo(
     }
     // Stop background audio timer
     stopBackgroundRender();
+    // Clear processing timeout
+    if (processingTimeoutId) {
+      clearTimeout(processingTimeoutId);
+      processingTimeoutId = null;
+    }
     // Exit PiP if active
     void exitPiP();
     // Remove video from DOM
@@ -647,7 +658,22 @@ export async function processVideo(
   };
 
   return new Promise<Blob>((resolve, reject) => {
+    // Start processing timeout
+    processingTimeoutId = setTimeout(() => {
+      isTimedOut = true;
+      cleanup();
+      cancelAnimationFrame(animationId);
+      try {
+        if (recorder.state === 'recording') {
+          recorder.stop();
+        }
+      } catch {}
+      reject(new Error(`Timeout: vídeo travou e foi abortado (provavelmente em ~${Math.round(video.currentTime)}s)`));
+    }, PROCESSING_TIMEOUT);
+
     recorder.onstop = () => {
+      if (isTimedOut) return; // Already handled by timeout
+      
       URL.revokeObjectURL(videoUrl);
       cancelAnimationFrame(animationId);
       cleanup();
