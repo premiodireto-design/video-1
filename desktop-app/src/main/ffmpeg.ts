@@ -203,9 +203,13 @@ export function processVideo(
     // IMPORTANT:
     // - Do NOT set a fixed duration on the background; let overlays stop on the shortest stream (the video).
     // - The template input is looped via input args (-loop 1), so it lasts for the whole video.
+    const targetAspect = width / height;
+
     const filterComplex = [
-      // Scale video to fit green area (cover mode)
-      `[0:v]scale=w='if(gt(a,${width}/${height}),${width},-1)':h='if(gt(a,${width}/${height}),-1,${height})':force_original_aspect_ratio=increase,crop=${width}:${height}:(iw-${width})/2:0,setsar=1[vid]`,
+      // Scale video to cover the green area (true cover mode)
+      // If the input is wider than target => fit height; else => fit width.
+      // Then center-crop both axes to avoid invalid crop sizes.
+      `[0:v]scale=w='if(gt(a,${targetAspect}),-1,${width})':h='if(gt(a,${targetAspect}),${height},-1)',crop=${width}:${height}:(iw-${width})/2:(ih-${height})/2,setsar=1[vid]`,
       // Template with chroma key
       `[1:v]scale=1080:1920,chromakey=0x00FF00:0.3:0.1[mask]`,
       // Infinite black background
