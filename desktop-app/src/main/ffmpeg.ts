@@ -160,10 +160,14 @@ function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'qualit
       ];
     
     default: // libx264
+      // Use tune=fastdecode for smoother playback
+      // Use threads=0 to auto-detect optimal thread count
       return [
         '-c:v', 'libx264',
         '-preset', q.x264,
         '-crf', String(q.crf),
+        '-tune', 'fastdecode',
+        '-threads', '0',
       ];
   }
 }
@@ -210,23 +214,27 @@ export function processVideo(
 
     // Build filter complex for chroma key + overlay
     // IMPORTANT:
-    // - Do NOT set a fixed duration on the background; let overlays stop on the shortest stream (the video).
-    // - The template input is looped via input args (-loop 1), so it lasts for the whole video.
+    // - Template PNG must have transparent pixels where the video should appear (green area).
+    // - We overlay the video first on a black background, then overlay the template on top.
+    // - The template's green pixels are removed via chromakey, revealing the video below.
+    // - Apply margin (2px) to avoid green edge artifacts.
     const targetAspect = width / height;
+    const margin = 2; // Safety margin to hide green edge pixels
 
     const filterComplex = [
       // Scale video to cover the green area (true cover mode)
       // If the input is wider than target => fit height; else => fit width.
       // Then center-crop both axes to avoid invalid crop sizes.
-      `[0:v]scale=w='if(gt(a,${targetAspect}),-1,${width})':h='if(gt(a,${targetAspect}),${height},-1)',crop=${width}:${height}:(iw-${width})/2:(ih-${height})/2,setsar=1[vid]`,
-      // Template with chroma key
-      `[1:v]scale=1080:1920,chromakey=0x00FF00:0.3:0.1[mask]`,
+      // Also convert colorspace to sRGB for consistency with template
+      `[0:v]scale=w='if(gt(a,${targetAspect}),-1,${width})':h='if(gt(a,${targetAspect}),${height},-1)',crop=${width}:${height}:(iw-${width})/2:(ih-${height})/2,setsar=1,format=rgb24[vid]`,
+      // Template with chroma key - use tighter tolerance for cleaner edges
+      `[1:v]scale=1080:1920,format=rgb24,chromakey=0x00FF00:0.25:0.08[mask]`,
       // Infinite black background
       `color=black:s=1080x1920[bg]`,
-      // Overlay video in green area (stop on shortest => video)
-      `[bg][vid]overlay=${x}:${y}:shortest=1[base]`,
+      // Overlay video in green area with margin (slightly inward to hide edges)
+      `[bg][vid]overlay=${x + margin}:${y + margin}:shortest=1[base]`,
       // Overlay template on top
-      `[base][mask]overlay=0:0:shortest=1[out]`,
+      `[base][mask]overlay=0:0:shortest=1,format=yuv420p[out]`,
     ].join(';');
 
     // Get encoder-specific flags
