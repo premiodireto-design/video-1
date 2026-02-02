@@ -1,4 +1,4 @@
-import { spawn, execSync } from 'child_process';
+import { spawn, spawnSync, execSync } from 'child_process';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { app } from 'electron';
@@ -81,25 +81,57 @@ export function detectGPU(): GPUInfo {
   let hasIntelQSV = false;
   let hasAMD = false;
 
+  const canUseEncoder = (encoder: 'h264_nvenc' | 'h264_qsv' | 'h264_amf') => {
+    // Many FFmpeg builds list GPU encoders even when the machine/driver can't actually use them.
+    // Do a tiny smoke-test encode against a generated source.
+    const args = [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      'nullsrc=s=128x128:d=0.2',
+      '-frames:v',
+      '2',
+      '-c:v',
+      encoder,
+      '-f',
+      'null',
+      '-',
+    ];
+    const res = spawnSync(ffmpegPath, args, {
+      windowsHide: true,
+      timeout: 8000,
+      encoding: 'utf8',
+    });
+    return res.status === 0;
+  };
+
   try {
-    // Check available encoders
+    // 1) Check which encoders exist in the FFmpeg build
     const output = execSync(`${ffmpegPath} -hide_banner -encoders`, { encoding: 'utf8' });
-    
-    if (output.includes('h264_nvenc')) {
+
+    const hasNvencInBuild = output.includes('h264_nvenc');
+    const hasQsvInBuild = output.includes('h264_qsv');
+    const hasAmfInBuild = output.includes('h264_amf');
+
+    // 2) Verify they actually work on this machine
+    if (hasNvencInBuild && canUseEncoder('h264_nvenc')) {
       hasNvidia = true;
       encoders.push('h264_nvenc');
     }
-    
-    if (output.includes('h264_qsv')) {
+
+    if (hasQsvInBuild && canUseEncoder('h264_qsv')) {
       hasIntelQSV = true;
       encoders.push('h264_qsv');
     }
-    
-    if (output.includes('h264_amf')) {
+
+    if (hasAmfInBuild && canUseEncoder('h264_amf')) {
       hasAMD = true;
       encoders.push('h264_amf');
     }
-    
+
     // Always add CPU encoder as fallback
     encoders.push('libx264');
   } catch (error) {
@@ -253,12 +285,25 @@ export function processVideo(
     const { videoPath, templatePath, outputPath, greenArea, settings } = options;
     const { x, y, width, height } = greenArea;
 
-    const isNvencDriverIssue = (stderr: string) => {
+    const isGpuEncoderInitIssue = (stderr: string) => {
       const s = stderr.toLowerCase();
       return (
+        // NVENC (very common on non-NVIDIA PCs, or NVIDIA w/out proper drivers)
+        s.includes('cannot load nvcuda.dll') ||
+        s.includes('no nvenc capable devices found') ||
+        // Generic encoder init failures
+        s.includes('error while opening encoder') ||
+        s.includes('could not open encoder') ||
+        s.includes('encoder not found') ||
+        s.includes('unknown encoder') ||
         s.includes('driver does not support the required nvenc api version') ||
         s.includes('minimum required nvidia driver') ||
-        s.includes('nvenc api version')
+        s.includes('nvenc api version') ||
+        // Intel QSV
+        s.includes('mfx') ||
+        s.includes('qsv') && s.includes('failed') ||
+        // AMD AMF
+        s.includes('amf') && (s.includes('failed') || s.includes('error'))
       );
     };
 
@@ -465,13 +510,15 @@ export function processVideo(
         return;
       }
 
-      // If NVENC fails due to driver incompatibility, auto-fallback to CPU
-      if (firstUseGpu && isNvencDriverIssue(first.stderrAll)) {
+       // If GPU encoding fails (missing drivers / unsupported GPU / encoder init failure), auto-fallback to CPU.
+       // This is critical to make the app work on *any* PC.
+       const attemptedGpuEncoder = firstUseGpu && pickEncoder(true) !== 'libx264';
+       if (attemptedGpuEncoder && isGpuEncoderInitIssue(first.stderrAll)) {
         onProgress({
           videoPath,
           progress: 0,
           stage: 'processing',
-          message: 'GPU incompatível (driver antigo). Reprocessando no CPU...',
+           message: 'GPU indisponível/incompatível. Reprocessando no CPU...',
         });
 
         const second = await runOnce(false);
