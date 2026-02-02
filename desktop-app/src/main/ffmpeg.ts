@@ -28,13 +28,19 @@ function getFFmpegPath(): string {
   const platform = process.platform;
   const ext = platform === 'win32' ? '.exe' : '';
   
+  console.log('[FFmpeg] Detecting FFmpeg path...');
+  console.log('[FFmpeg] Platform:', platform);
+  console.log('[FFmpeg] Is packaged:', app.isPackaged);
+  
   // 1. Try bundled FFmpeg (if app is packaged and ffmpeg-bin exists)
   if (app.isPackaged) {
     const bundledPath = join(process.resourcesPath, 'ffmpeg-bin', `ffmpeg${ext}`);
+    console.log('[FFmpeg] Checking bundled path:', bundledPath);
     if (existsSync(bundledPath)) {
-      console.log('[FFmpeg] Using bundled:', bundledPath);
+      console.log('[FFmpeg] ✓ Using bundled:', bundledPath);
       return bundledPath;
     }
+    console.log('[FFmpeg] ✗ Bundled not found');
   }
   
   // 2. Try common Windows installation paths
@@ -46,16 +52,20 @@ function getFFmpegPath(): string {
       join(process.env.USERPROFILE || '', 'ffmpeg', 'bin', 'ffmpeg.exe'),
     ];
     
+    console.log('[FFmpeg] Checking common Windows paths...');
     for (const p of commonPaths) {
-      if (existsSync(p)) {
-        console.log('[FFmpeg] Found at:', p);
+      console.log('[FFmpeg] Checking:', p);
+      const exists = existsSync(p);
+      console.log('[FFmpeg] Exists:', exists);
+      if (exists) {
+        console.log('[FFmpeg] ✓ Found at:', p);
         return p;
       }
     }
   }
   
   // 3. Fallback to system PATH
-  console.log('[FFmpeg] Using system PATH');
+  console.log('[FFmpeg] ✗ No local path found, using system PATH');
   return 'ffmpeg';
 }
 
