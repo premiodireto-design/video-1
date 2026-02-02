@@ -546,25 +546,85 @@ export async function processVideo(
     pipWindow = null;
   };
   
-  // Use setInterval as fallback for background rendering (less throttled than rAF)
+  // AudioContext-based timer that bypasses browser throttling in background tabs
+  // This uses the ScriptProcessorNode which fires ~46ms regardless of tab visibility
+  let bgAudioContext: AudioContext | null = null;
+  let bgScriptNode: ScriptProcessorNode | null = null;
+  let bgSourceNode: AudioBufferSourceNode | null = null;
+  
   const startBackgroundRender = () => {
-    // 30fps = ~33ms interval
-    backgroundRenderInterval = setInterval(() => {
-      if (!isRecording) {
-        if (backgroundRenderInterval) {
-          clearInterval(backgroundRenderInterval);
-          backgroundRenderInterval = null;
-        }
-        return;
-      }
+    try {
+      // Create a separate AudioContext just for the background timer
+      bgAudioContext = new AudioContext({ latencyHint: 'playback' });
       
-      // Only render if page is hidden (rAF handles visible state)
-      if (document.hidden) {
-        try {
-          renderFrame();
-        } catch {}
-      }
-    }, 33);
+      // ScriptProcessorNode fires onaudioprocess at regular intervals even in background
+      // 2048 samples at 44100Hz = ~46ms intervals
+      bgScriptNode = bgAudioContext.createScriptProcessor(2048, 1, 1);
+      
+      bgScriptNode.onaudioprocess = () => {
+        if (!isRecording) {
+          return;
+        }
+        
+        // Only render if page is hidden (rAF handles visible state)
+        if (document.hidden) {
+          try {
+            // Also ensure video keeps playing
+            if (video.paused && !video.ended && video.currentTime < endTime) {
+              video.play().catch(() => {});
+            }
+            renderFrame();
+          } catch {}
+        }
+      };
+      
+      // We need to connect to destination for the node to be active
+      // Create a silent buffer source
+      bgSourceNode = bgAudioContext.createBufferSource();
+      const silentBuffer = bgAudioContext.createBuffer(1, 2048, bgAudioContext.sampleRate);
+      bgSourceNode.buffer = silentBuffer;
+      bgSourceNode.loop = true;
+      
+      bgSourceNode.connect(bgScriptNode);
+      bgScriptNode.connect(bgAudioContext.destination);
+      bgSourceNode.start();
+      
+      console.log('[VideoProcessor] Background audio timer started');
+    } catch (e) {
+      console.warn('[VideoProcessor] Could not start background audio timer:', e);
+      // Fallback to setInterval (will be throttled but better than nothing)
+      backgroundRenderInterval = setInterval(() => {
+        if (!isRecording) {
+          if (backgroundRenderInterval) {
+            clearInterval(backgroundRenderInterval);
+            backgroundRenderInterval = null;
+          }
+          return;
+        }
+        if (document.hidden) {
+          try {
+            if (video.paused && !video.ended) video.play().catch(() => {});
+            renderFrame();
+          } catch {}
+        }
+      }, 33);
+    }
+  };
+  
+  const stopBackgroundRender = () => {
+    if (backgroundRenderInterval) {
+      clearInterval(backgroundRenderInterval);
+      backgroundRenderInterval = null;
+    }
+    try {
+      bgSourceNode?.stop();
+      bgSourceNode?.disconnect();
+      bgScriptNode?.disconnect();
+      bgAudioContext?.close();
+    } catch {}
+    bgSourceNode = null;
+    bgScriptNode = null;
+    bgAudioContext = null;
   };
 
   const cleanup = () => {
@@ -576,10 +636,8 @@ export async function processVideo(
       clearInterval(flushInterval);
       flushInterval = null;
     }
-    if (backgroundRenderInterval) {
-      clearInterval(backgroundRenderInterval);
-      backgroundRenderInterval = null;
-    }
+    // Stop background audio timer
+    stopBackgroundRender();
     // Exit PiP if active
     void exitPiP();
     // Remove video from DOM
