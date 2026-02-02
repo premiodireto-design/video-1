@@ -192,6 +192,15 @@ export function processVideo(
     const { videoPath, templatePath, outputPath, greenArea, settings } = options;
     const { x, y, width, height } = greenArea;
 
+    const isNvencDriverIssue = (stderr: string) => {
+      const s = stderr.toLowerCase();
+      return (
+        s.includes('driver does not support the required nvenc api version') ||
+        s.includes('minimum required nvidia driver') ||
+        s.includes('nvenc api version')
+      );
+    };
+
     onProgress({
       videoPath,
       progress: 0,
@@ -221,79 +230,101 @@ export function processVideo(
     ].join(';');
 
     // Get encoder-specific flags
-    const encoderFlags = getEncoderFlags(
-      settings.useGPU ? settings.encoder : 'libx264',
-      settings.quality
-    );
+    const pickEncoder = (useGpu: boolean) => (useGpu ? settings.encoder : 'libx264');
+    const buildEncoderFlags = (useGpu: boolean) =>
+      getEncoderFlags(pickEncoder(useGpu), settings.quality);
 
-    // Build FFmpeg command
-    const args = [
-      '-y', // Overwrite output
-      '-i', videoPath,
-      // Loop template image for the entire processing duration
-      '-loop', '1',
-      '-i', templatePath,
-      '-ss', String(settings.trimStart),
-      '-filter_complex', filterComplex,
-      '-map', '[out]',
-      '-map', '0:a?', // Map audio if exists
-      ...encoderFlags,
-      '-c:a', 'aac',
-      '-b:a', '192k',
-      '-movflags', '+faststart',
-      '-progress', 'pipe:1', // Output progress to stdout
-      outputPath,
-    ];
+    const runOnce = (useGpu: boolean) => {
+      const encoderFlags = buildEncoderFlags(useGpu);
 
-    console.log('[FFmpeg] Command:', ffmpegPath, args.join(' '));
+      // Build FFmpeg command
+      const args = [
+        '-y', // Overwrite output
+        '-i', videoPath,
+        // Loop template image for the entire processing duration
+        '-loop', '1',
+        '-i', templatePath,
+        '-ss', String(settings.trimStart),
+        '-filter_complex', filterComplex,
+        '-map', '[out]',
+        '-map', '0:a?', // Map audio if exists
+        ...encoderFlags,
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-movflags', '+faststart',
+        '-progress', 'pipe:1', // Output progress to stdout
+        outputPath,
+      ];
 
-    const ffmpeg = spawn(ffmpegPath, args);
-    let duration = 0;
-    const stderrLines: string[] = [];
+      console.log('[FFmpeg] Command:', ffmpegPath, args.join(' '));
+      const ffmpeg = spawn(ffmpegPath, args);
+      let duration = 0;
+      const stderrLines: string[] = [];
 
-    ffmpeg.stderr.on('data', (data: Buffer) => {
-      const line = data.toString();
-      // Keep a rolling buffer of stderr lines for better diagnostics
-      for (const l of line.split(/\r?\n/)) {
-        const trimmed = l.trim();
-        if (!trimmed) continue;
-        stderrLines.push(trimmed);
-        if (stderrLines.length > 200) stderrLines.shift();
-      }
-      
-      // Parse duration
-      const durationMatch = line.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
-      if (durationMatch) {
-        const [, hours, minutes, seconds] = durationMatch;
-        duration = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
-      }
-    });
+      ffmpeg.stderr.on('data', (data: Buffer) => {
+        const line = data.toString();
+        // Keep a rolling buffer of stderr lines for better diagnostics
+        for (const l of line.split(/\r?\n/)) {
+          const trimmed = l.trim();
+          if (!trimmed) continue;
+          stderrLines.push(trimmed);
+          if (stderrLines.length > 200) stderrLines.shift();
+        }
 
-    ffmpeg.stdout.on('data', (data: Buffer) => {
-      const line = data.toString();
-      
-      // Parse progress
-      const timeMatch = line.match(/out_time_ms=(\d+)/);
-      const speedMatch = line.match(/speed=\s*([\d.]+)x/);
-      const fpsMatch = line.match(/fps=\s*([\d.]+)/);
-      
-      if (timeMatch && duration > 0) {
-        const currentTime = parseInt(timeMatch[1]) / 1000000;
-        const progress = Math.min(99, Math.round((currentTime / duration) * 100));
-        
-        onProgress({
-          videoPath,
-          progress,
-          stage: 'processing',
-          message: `Processando... ${progress}%`,
-          fps: fpsMatch ? parseFloat(fpsMatch[1]) : undefined,
-          speed: speedMatch ? `${speedMatch[1]}x` : undefined,
+        // Parse duration
+        const durationMatch = line.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
+        if (durationMatch) {
+          const [, hours, minutes, seconds] = durationMatch;
+          duration = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
+        }
+      });
+
+      ffmpeg.stdout.on('data', (data: Buffer) => {
+        const line = data.toString();
+
+        // Parse progress
+        const timeMatch = line.match(/out_time_ms=(\d+)/);
+        const speedMatch = line.match(/speed=\s*([\d.]+)x/);
+        const fpsMatch = line.match(/fps=\s*([\d.]+)/);
+
+        if (timeMatch && duration > 0) {
+          const currentTime = parseInt(timeMatch[1]) / 1000000;
+          const progress = Math.min(99, Math.round((currentTime / duration) * 100));
+
+          onProgress({
+            videoPath,
+            progress,
+            stage: 'processing',
+            message: `Processando... ${progress}%${useGpu ? ' (GPU)' : ' (CPU)'}`,
+            fps: fpsMatch ? parseFloat(fpsMatch[1]) : undefined,
+            speed: speedMatch ? `${speedMatch[1]}x` : undefined,
+          });
+        }
+      });
+
+      return new Promise<{ code: number | null; stderrTail: string; stderrAll: string }>((res) => {
+        ffmpeg.on('close', (code) => {
+          const stderrAll = stderrLines.join('\n');
+          const stderrTail = stderrLines.slice(-25).join('\n');
+          res({ code, stderrTail, stderrAll });
         });
-      }
-    });
 
-    ffmpeg.on('close', (code) => {
-      if (code === 0) {
+        ffmpeg.on('error', (error) => {
+          const stderrAll = stderrLines.join('\n');
+          const stderrTail = stderrLines.slice(-25).join('\n');
+          // Use -1 to represent spawn-level errors
+          console.error('[FFmpeg] spawn error:', error);
+          res({ code: -1, stderrTail, stderrAll: `${stderrAll}\n${error.message}`.trim() });
+        });
+      });
+    };
+
+    (async () => {
+      // First attempt: respect user setting
+      const firstUseGpu = !!settings.useGPU;
+      const first = await runOnce(firstUseGpu);
+
+      if (first.code === 0) {
         onProgress({
           videoPath,
           progress: 100,
@@ -301,30 +332,54 @@ export function processVideo(
           message: 'Concluído!',
         });
         resolve({ success: true, outputPath });
-      } else {
-        const tail = stderrLines.slice(-25).join('\n');
-        const hint = tail
-          ? `\n\n--- FFmpeg stderr (últimas linhas) ---\n${tail}`
-          : '';
+        return;
+      }
 
+      // If NVENC fails due to driver incompatibility, auto-fallback to CPU
+      if (firstUseGpu && isNvencDriverIssue(first.stderrAll)) {
+        onProgress({
+          videoPath,
+          progress: 0,
+          stage: 'processing',
+          message: 'GPU incompatível (driver antigo). Reprocessando no CPU...',
+        });
+
+        const second = await runOnce(false);
+        if (second.code === 0) {
+          onProgress({
+            videoPath,
+            progress: 100,
+            stage: 'done',
+            message: 'Concluído! (CPU)',
+          });
+          resolve({ success: true, outputPath });
+          return;
+        }
+
+        const hint2 = second.stderrTail
+          ? `\n\n--- FFmpeg stderr (últimas linhas) ---\n${second.stderrTail}`
+          : '';
         onProgress({
           videoPath,
           progress: 0,
           stage: 'error',
-          message: `FFmpeg saiu com código ${code}${hint}`,
+          message: `FFmpeg saiu com código ${second.code}${hint2}`,
         });
-        resolve({ success: false, error: `FFmpeg exit code: ${code}${hint}` });
+        resolve({ success: false, error: `FFmpeg exit code: ${second.code}${hint2}` });
+        return;
       }
-    });
 
-    ffmpeg.on('error', (error) => {
+      const hint = first.stderrTail
+        ? `\n\n--- FFmpeg stderr (últimas linhas) ---\n${first.stderrTail}`
+        : '';
+
       onProgress({
         videoPath,
         progress: 0,
         stage: 'error',
-        message: error.message,
+        message: `FFmpeg saiu com código ${first.code}${hint}`,
       });
-      resolve({ success: false, error: error.message });
-    });
+      resolve({ success: false, error: `FFmpeg exit code: ${first.code}${hint}` });
+    })();
   });
 }
