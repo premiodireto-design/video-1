@@ -8,6 +8,7 @@ export interface ProcessingSettings {
   removeBlackBars: boolean;
   watermark?: string; // Optional @ handle for watermark
   useAiFraming?: boolean; // Use AI to detect faces and position video
+  useCloudProcessing?: boolean; // Process on server (faster)
 }
 
 export interface ProcessingProgress {
