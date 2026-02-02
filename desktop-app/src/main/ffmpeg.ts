@@ -245,9 +245,17 @@ export function processVideo(
 
     const ffmpeg = spawn(ffmpegPath, args);
     let duration = 0;
+    const stderrLines: string[] = [];
 
     ffmpeg.stderr.on('data', (data: Buffer) => {
       const line = data.toString();
+      // Keep a rolling buffer of stderr lines for better diagnostics
+      for (const l of line.split(/\r?\n/)) {
+        const trimmed = l.trim();
+        if (!trimmed) continue;
+        stderrLines.push(trimmed);
+        if (stderrLines.length > 200) stderrLines.shift();
+      }
       
       // Parse duration
       const durationMatch = line.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
@@ -290,13 +298,18 @@ export function processVideo(
         });
         resolve({ success: true, outputPath });
       } else {
+        const tail = stderrLines.slice(-25).join('\n');
+        const hint = tail
+          ? `\n\n--- FFmpeg stderr (últimas linhas) ---\n${tail}`
+          : '';
+
         onProgress({
           videoPath,
           progress: 0,
           stage: 'error',
-          message: `FFmpeg saiu com código ${code}`,
+          message: `FFmpeg saiu com código ${code}${hint}`,
         });
-        resolve({ success: false, error: `FFmpeg exit code: ${code}` });
+        resolve({ success: false, error: `FFmpeg exit code: ${code}${hint}` });
       }
     });
 
