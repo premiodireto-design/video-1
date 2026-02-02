@@ -70,6 +70,7 @@ export async function processVideo(
   
   // Load and prepare video - CRITICAL: must NOT be muted initially for audio capture
   const video = document.createElement('video');
+  video.preload = 'auto';
   video.playsInline = true;
   video.crossOrigin = 'anonymous';
   video.playbackRate = 1;
@@ -212,8 +213,10 @@ export async function processVideo(
   });
 
   // Set up MediaRecorder (video from canvas + audio from the source video)
-  // Use variable frame-rate capture when possible to reduce A/V drift under load.
-  const canvasStream = canvas.captureStream();
+  // For long videos, capturing at a lower FPS significantly reduces CPU/GPU pressure
+  // and helps prevent stalls in decoding/encoding.
+  const targetFps = settings.maxQuality ? 60 : 30;
+  const canvasStream = canvas.captureStream(targetFps);
 
   // We start with the canvas video track, then (after playback starts) we attach an audio track.
   const combinedStream = new MediaStream(canvasStream.getVideoTracks());
@@ -316,6 +319,7 @@ export async function processVideo(
   let consecutiveStalls = 0;
   let renderEveryNFrames = 1;
   let frameCounter = 0;
+  let lastReportedBucket = -1;
   const VIDEO_TIME_EPSILON = 0.001;
   const forceRecover = async () => {
     // Try a more aggressive recovery sequence:
@@ -328,9 +332,11 @@ export async function processVideo(
       }
     } catch {}
 
-    // Sometimes a tiny seek unblocks the decoder.
+    // Sometimes a small seek unblocks the decoder. If stalls keep happening,
+    // nudge a bit further.
     try {
-      const safeTarget = Math.min(video.currentTime + 0.05, Math.max(trimStart, endTime - 0.1));
+      const nudge = consecutiveStalls >= 3 ? 0.25 : 0.08;
+      const safeTarget = Math.min(video.currentTime + nudge, Math.max(trimStart, endTime - 0.1));
       if (Number.isFinite(safeTarget) && safeTarget > video.currentTime) {
         video.currentTime = safeTarget;
       }
@@ -420,9 +426,13 @@ export async function processVideo(
     // Update progress (throttled to reduce UI overhead)
     const currentProgress = video.currentTime - trimStart;
     const progressPercent = Math.round((currentProgress / effectiveDuration) * 100);
-    
-    // Only update UI every 5% to reduce main thread pressure
-    if (progressPercent % 5 === 0 || progressPercent >= 99) {
+
+    // Only update UI when we enter a new 5% bucket (prevents spamming on long videos)
+    // and always at the end.
+    const bucket = progressPercent >= 99 ? 99 : Math.floor(progressPercent / 5) * 5;
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    if (bucket !== lastReportedBucket || progressPercent >= 99) {
+      lastReportedBucket = bucket;
       const progress = 20 + (currentProgress / effectiveDuration) * 75;
       onProgress({
         videoId,
