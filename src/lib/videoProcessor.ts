@@ -59,8 +59,11 @@ export async function processVideo(
   videoId: string,
   onProgress: ProgressCallback
 ): Promise<Blob> {
-  // Timeout máximo (pedido): 1 minuto para vídeos travados
-  const PROCESSING_TIMEOUT = 60 * 1000;
+  // Timeout do processamento local:
+  // - precisa ser >= duração real (processamento em tempo-real)
+  // - mas ainda deve abortar casos realmente travados
+  // Observação: codecs como HEVC podem não ser decodificáveis no navegador; nesses casos use a nuvem.
+  let PROCESSING_TIMEOUT = 5 * 60 * 1000; // recalculado depois que soubermos a duração
   let processingTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let isTimedOut = false;
   
@@ -90,14 +93,18 @@ export async function processVideo(
   const videoUrl = URL.createObjectURL(videoFile);
   
   // Aguardar vídeo carregar com timeout e verificação robusta
-  const VIDEO_LOAD_TIMEOUT = 30_000; // 30s para carregar
+  const VIDEO_LOAD_TIMEOUT = 60_000; // 60s para carregar (alguns vídeos demoram para decodificar o 1º frame)
   await new Promise<void>((res, rej) => {
     let resolved = false;
     
     const loadTimeout = setTimeout(() => {
       if (!resolved) {
         resolved = true;
-        rej(new Error('Timeout: vídeo demorou demais para carregar (30s). Pode estar corrompido ou ser um formato não suportado.'));
+        rej(
+          new Error(
+            'Timeout: o vídeo demorou demais para carregar (60s). Se for HEVC/H.265 ou outro codec não suportado no seu navegador, ative “Processar na nuvem”.'
+          )
+        );
       }
     }, VIDEO_LOAD_TIMEOUT);
     
@@ -157,6 +164,15 @@ export async function processVideo(
   const trimStart = 0.5; // Cortar 0.5s do início
   const trimEnd = 0.5; // Cortar 0.5s do final
   const effectiveDuration = Math.max(0.5, duration - trimStart - trimEnd);
+
+  // Agora que sabemos a duração, ajustamos o timeout:
+  // - mínimo 5min
+  // - em geral 2x a duração (dá margem pra variações)
+  // - máximo 30min
+  PROCESSING_TIMEOUT = Math.min(
+    30 * 60 * 1000,
+    Math.max(5 * 60 * 1000, Math.ceil(effectiveDuration * 1000 * 2))
+  );
   
   // Set video to start after trim
   video.currentTime = trimStart;
@@ -391,7 +407,7 @@ export async function processVideo(
   let frameCounter = 0;
   let lastReportedBucket = -1;
   const VIDEO_TIME_EPSILON = 0.001;
-  const STALL_ABORT_MS = 60_000;
+  const STALL_ABORT_MS = 120_000;
   const forceRecover = async () => {
     // Try a more aggressive recovery sequence:
     // 1) pause
@@ -446,7 +462,7 @@ export async function processVideo(
           cancelAnimationFrame(animationId);
           rejectProcessing?.(
             new Error(
-              `Timeout: vídeo travou (sem avançar) e foi abortado (em ~${Math.round(video.currentTime)}s)`
+              `Timeout: vídeo travou (sem avançar) e foi abortado (em ~${Math.round(video.currentTime)}s). Se isso acontecer com frequência, ative “Processar na nuvem”.`
             )
           );
           return;
@@ -758,7 +774,9 @@ export async function processVideo(
         }
       } catch {}
       rejectProcessing?.(
-        new Error(`Timeout: vídeo travou e foi abortado (em ~${Math.round(video.currentTime)}s)`)
+        new Error(
+          `Timeout: vídeo travou e foi abortado (em ~${Math.round(video.currentTime)}s). Se o arquivo for HEVC/H.265 ou similar, ative “Processar na nuvem”.`
+        )
       );
     }, PROCESSING_TIMEOUT);
 

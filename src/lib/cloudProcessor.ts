@@ -19,9 +19,23 @@ async function uploadToStorage(
   filename: string,
   onProgress?: (progress: number) => void
 ): Promise<string> {
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError) {
+    throw new Error(`Falha ao validar login: ${userError.message}`);
+  }
+
+  if (!user) {
+    throw new Error('Faça login para usar o processamento na nuvem.');
+  }
+
   const timestamp = Date.now();
   const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const path = `${timestamp}_${safeName}`;
+  // IMPORTANT: storage RLS expects files to be stored under "<user_id>/..."
+  const path = `${user.id}/${timestamp}_${safeName}`;
 
   // For progress tracking, we'd need XHR but Supabase SDK doesn't expose it
   // So we'll simulate progress based on file size
