@@ -11,6 +11,7 @@ import Dashboard from "./pages/Dashboard";
 import NotFound from "./pages/NotFound";
 import AnalyserTikTok from "./pages/AnalyserTikTok";
 import AnalyserInstagram from "./pages/AnalyserInstagram";
+import DesktopAppTutorial from "./pages/DesktopAppTutorial";
 
 const queryClient = new QueryClient();
 
@@ -73,6 +74,7 @@ const App = () => (
               />
               <Route path="/analyser/tiktok" element={<AnalyserTikTok />} />
               <Route path="/analyser/instagram" element={<AnalyserInstagram />} />
+              <Route path="/desktop-app" element={<DesktopAppTutorial />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>

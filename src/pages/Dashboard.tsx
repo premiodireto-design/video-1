@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import JSZip from 'jszip';
 import { Header } from '@/components/layout/Header';
 import { TemplateUpload } from '@/components/template/TemplateUpload';
@@ -484,31 +485,14 @@ export default function Dashboard() {
           <div className="flex items-center gap-3 p-3 bg-primary/10 border border-primary/20 rounded-lg">
             <div className="hidden sm:block">
               <span className="text-sm font-medium">⚡ App Desktop</span>
-              <span className="text-xs text-muted-foreground ml-1">10x mais rápido com GPU</span>
+              <span className="text-xs text-muted-foreground ml-1">10x mais rápido</span>
             </div>
-            <div className="flex gap-2">
-              <a 
-                href="https://github.com/seu-usuario/videotemplate-pro/releases/latest/download/VideoTemplatePro-Setup.exe"
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-                download
-              >
-                Windows
-              </a>
-              <a 
-                href="https://github.com/seu-usuario/videotemplate-pro/releases/latest/download/VideoTemplatePro.dmg"
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-                download
-              >
-                macOS
-              </a>
-              <a 
-                href="https://github.com/seu-usuario/videotemplate-pro/releases/latest/download/VideoTemplatePro.AppImage"
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-                download
-              >
-                Linux
-              </a>
-            </div>
+            <Link 
+              to="/desktop-app"
+              className="inline-flex items-center gap-1 px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+            >
+              📥 Como Baixar
+            </Link>
           </div>
         </div>
 
