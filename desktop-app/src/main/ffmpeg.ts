@@ -125,23 +125,22 @@ export function detectGPU(): GPUInfo {
  * Get encoder-specific flags for best performance
  */
 function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'quality'): string[] {
+  // Use simpler presets for better compatibility across different FFmpeg/driver versions
   const qualityMap = {
-    fast: { nvenc: 'p1', qsv: 'veryfast', amf: 'speed', x264: 'ultrafast', crf: 28 },
-    balanced: { nvenc: 'p4', qsv: 'faster', amf: 'balanced', x264: 'veryfast', crf: 23 },
-    quality: { nvenc: 'p7', qsv: 'slower', amf: 'quality', x264: 'slow', crf: 18 },
+    fast: { nvenc: 'fast', qsv: 'veryfast', amf: 'speed', x264: 'ultrafast', crf: 28 },
+    balanced: { nvenc: 'medium', qsv: 'faster', amf: 'balanced', x264: 'veryfast', crf: 23 },
+    quality: { nvenc: 'slow', qsv: 'slower', amf: 'quality', x264: 'slow', crf: 18 },
   };
   
   const q = qualityMap[quality];
 
   switch (encoder) {
     case 'h264_nvenc':
+      // Simplified NVENC flags for maximum compatibility
       return [
         '-c:v', 'h264_nvenc',
         '-preset', q.nvenc,
-        '-tune', 'hq',
-        '-rc', 'vbr',
         '-cq', String(q.crf),
-        '-b:v', '0',
       ];
     
     case 'h264_qsv':
