@@ -312,6 +312,36 @@ export async function processVideo(
   let lastProgressTime = 0;
   let lastVideoTime = 0;
   let stallCheckInterval: ReturnType<typeof setInterval> | null = null;
+  let flushInterval: ReturnType<typeof setInterval> | null = null;
+  let consecutiveStalls = 0;
+  let renderEveryNFrames = 1;
+  let frameCounter = 0;
+  const VIDEO_TIME_EPSILON = 0.001;
+  const forceRecover = async () => {
+    // Try a more aggressive recovery sequence:
+    // 1) pause
+    // 2) nudge currentTime forward a tiny bit (seek)
+    // 3) play again
+    try {
+      if (!video.ended) {
+        video.pause();
+      }
+    } catch {}
+
+    // Sometimes a tiny seek unblocks the decoder.
+    try {
+      const safeTarget = Math.min(video.currentTime + 0.05, Math.max(trimStart, endTime - 0.1));
+      if (Number.isFinite(safeTarget) && safeTarget > video.currentTime) {
+        video.currentTime = safeTarget;
+      }
+    } catch {}
+
+    try {
+      await video.play();
+    } catch {
+      // If we can't resume, we'll let the main loop stopRecording() on next checks.
+    }
+  };
   
   const startStallDetection = () => {
     stallCheckInterval = setInterval(() => {
@@ -324,24 +354,33 @@ export async function processVideo(
       const currentVideoTime = video.currentTime;
       
       // If video time hasn't changed in 2 seconds but we're still recording
-      if (currentVideoTime === lastVideoTime && now - lastProgressTime > 2000) {
+      if (Math.abs(currentVideoTime - lastVideoTime) < VIDEO_TIME_EPSILON && now - lastProgressTime > 2000) {
         console.warn('[VideoProcessor] Stall detected, attempting recovery...');
-        
-        // Try to recover by nudging the video forward slightly
-        if (!video.paused && !video.ended && currentVideoTime < endTime) {
-          // Resume playback if needed
-          video.play().catch(() => {});
+
+        consecutiveStalls++;
+        // Under heavy load, rendering every single frame can contribute to stalls.
+        // Increase frame skipping progressively during stalls.
+        renderEveryNFrames = Math.min(4, 1 + consecutiveStalls);
+
+        if (!video.ended && currentVideoTime < endTime) {
+          void forceRecover();
         }
       }
       
-      if (currentVideoTime !== lastVideoTime) {
+      if (Math.abs(currentVideoTime - lastVideoTime) >= VIDEO_TIME_EPSILON) {
         lastProgressTime = now;
         lastVideoTime = currentVideoTime;
+        consecutiveStalls = 0;
+        renderEveryNFrames = 1;
       }
     }, 500);
   };
 
   const renderFrame = () => {
+    frameCounter++;
+    if (renderEveryNFrames > 1 && frameCounter % renderEveryNFrames !== 0) {
+      return;
+    }
     // Render in 1080x1920 "virtual" coords, scaled to the actual canvas size
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
 
@@ -473,6 +512,10 @@ export async function processVideo(
       clearInterval(stallCheckInterval);
       stallCheckInterval = null;
     }
+    if (flushInterval) {
+      clearInterval(flushInterval);
+      flushInterval = null;
+    }
   };
 
   return new Promise<Blob>((resolve, reject) => {
@@ -540,8 +583,6 @@ export async function processVideo(
     video.volume = 0.001;
 
     // Periodic buffer flush to prevent encoder stalls (every 1 second)
-    let flushInterval: ReturnType<typeof setInterval> | null = null;
-    
     const startBufferFlush = () => {
       flushInterval = setInterval(() => {
         if (recorder.state === 'recording') {
@@ -550,6 +591,7 @@ export async function processVideo(
           } catch {}
         } else if (flushInterval) {
           clearInterval(flushInterval);
+          flushInterval = null;
         }
       }, 1000);
     };
