@@ -91,25 +91,46 @@ export default function Dashboard() {
           ));
         } catch (error) {
           console.error('Error processing video:', video.name, error);
+          
+          // Mostrar mensagem específica do erro
+          const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+          const isTimeout = errorMsg.includes('Timeout');
+          
+          toast({
+            variant: 'destructive',
+            title: isTimeout ? 'Vídeo travou - pulando' : 'Erro no vídeo',
+            description: `${video.name}: ${errorMsg}`,
+          });
+          
           setVideos(prev => prev.map(v => 
             v.id === video.id ? { 
               ...v, 
               status: 'failed', 
-              error: error instanceof Error ? error.message : 'Erro desconhecido',
+              error: errorMsg,
               progress: 0 
             } : v
           ));
+          
+          // Continuar para o próximo vídeo (não interromper o processamento)
+          console.log(`Pulando vídeo ${video.name} devido a erro. Continuando...`);
         }
         
         // Small delay between videos to let browser recover resources
         if (i < videosToProcess.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 300));
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
 
+      const successCount = videosToProcess.filter(v => 
+        videos.find(vx => vx.id === v.id)?.status === 'completed'
+      ).length;
+      const failedCount = videosToProcess.length - successCount;
+      
       toast({
         title: 'Processamento concluído!',
-        description: `${videosToProcess.length} vídeo(s) processado(s)`,
+        description: failedCount > 0 
+          ? `${successCount} OK, ${failedCount} com erro(s)`
+          : `${successCount} vídeo(s) processado(s) com sucesso`,
       });
     } catch (error) {
       console.error('Processing error:', error);
