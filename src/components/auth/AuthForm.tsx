@@ -199,19 +199,22 @@ export function AuthForm() {
                     </span>
                   </h3>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Processe vídeos com aceleração GPU (NVIDIA/Intel/AMD). Sem limites de tamanho.
+                    Processe vídeos com GPU. <strong>Requer compilação</strong> - veja o tutorial.
+                  </p>
+                </div>
+                <div className="p-3 bg-muted rounded-lg text-sm">
+                  <p className="font-medium mb-1">⚠️ Não existe download pronto</p>
+                  <p className="text-muted-foreground text-xs">
+                    O app precisa ser compilado no seu PC. Siga o tutorial para gerar o executável.
                   </p>
                 </div>
                 <Button className="gap-2 w-full" asChild>
                   <Link to="/desktop-app">
                     <Monitor className="h-4 w-4" />
-                    Ver Tutorial de Instalação
+                    Abrir Tutorial Completo
                     <ArrowRight className="h-4 w-4" />
                   </Link>
                 </Button>
-                <p className="text-xs text-muted-foreground text-center">
-                  Guia passo a passo para baixar, compilar e usar o app
-                </p>
               </div>
             </div>
           </CardContent>
