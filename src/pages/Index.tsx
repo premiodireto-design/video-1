@@ -1,7 +1,8 @@
-import Dashboard from './Dashboard';
+import { Navigate } from 'react-router-dom';
 
 const Index = () => {
-  return <Dashboard />;
+  // Redirect to dashboard (which requires auth)
+  return <Navigate to="/dashboard" replace />;
 };
 
 export default Index;
