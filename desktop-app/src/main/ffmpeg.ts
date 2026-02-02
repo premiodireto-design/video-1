@@ -440,15 +440,23 @@ export function processVideo(
       // For FFmpeg crop: crop=w:h:x:y where x and y are the top-left corner of the crop area
       // When anchorY=0 (top), we want y=0 (keep top)
       // When anchorY=1 (bottom), we want y=(ih-height) (keep bottom)
-      // Use max(0,...) and min to prevent negative or out-of-bounds values
-      const cropX = `max(0,min(iw-${expandedWidth},(iw-${expandedWidth})*${aiOffsetX}))`;
-      const cropY = `max(0,min(ih-${expandedHeight},(ih-${expandedHeight})*${aiOffsetY}))`;
+      // Calculate crop position - FFmpeg crop filter needs simple expressions
+      // Use fixed values based on AI anchor points to avoid complex expression parsing issues
+      // The actual crop position will be calculated relative to scaled video dimensions
+      // For FFmpeg, we use a simpler expression with the crop filter's built-in variables
+      // cropX = (iw - ow) * anchorX  -- where ow is output width (expandedWidth)
+      // cropY = (ih - oh) * anchorY  -- where oh is output height (expandedHeight)
+      
+      // Simplified crop expression that FFmpeg can parse correctly
+      // Using 'out_w' and 'out_h' would require setting them first, so we use the literal values
+      const cropXExpr = `'(iw-${expandedWidth})*${aiOffsetX}'`;
+      const cropYExpr = `'(ih-${expandedHeight})*${aiOffsetY}'`;
 
       const filterComplex = [
         // Scale video to cover the green area (true cover mode with overflow)
         // Then crop to exact size using AI-determined anchor points
         // Also convert colorspace to sRGB for consistency with template
-        `[0:v]${scaleExpr},crop=${expandedWidth}:${expandedHeight}:${cropX}:${cropY},setsar=1,format=rgb24[vid]`,
+        `[0:v]${scaleExpr},crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr},setsar=1,format=rgb24[vid]`,
         // Template with chroma key - use tighter tolerance for cleaner edges
         `[1:v]scale=1080:1920,format=rgb24,chromakey=0x00FF00:0.25:0.08[mask]`,
         // Infinite black background
