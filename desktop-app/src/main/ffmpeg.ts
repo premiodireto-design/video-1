@@ -4,6 +4,7 @@ import { existsSync } from 'fs';
 import { app } from 'electron';
 import { extractFirstFrame, analyzeVideoFrame, calculateSmartPosition, getDefaultAnalysis, type FrameAnalysis } from './aiFraming';
 import { detectVideoBorders, generateCropFilter, type CropInfo } from './videoCropDetect';
+import { detectMotionArea, generateMotionCropFilter, type MotionArea } from './motionDetect';
 
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0.5;
@@ -408,31 +409,47 @@ export function processVideo(
        const outW = templateDims?.width ?? 1080;
        const outH = templateDims?.height ?? 1920;
 
-      // STEP 1: Detect and remove any black/white borders from the video
-      // This runs before AI analysis to ensure we're analyzing clean content
+      // STEP 1: Detect motion area to find real video content
+      // This removes static overlays (text, logos) AND black borders
       onProgress({
         videoPath,
         progress: 0,
         stage: 'analyzing',
-        message: 'Detectando molduras no vídeo...',
+        message: 'Detectando área de conteúdo do vídeo...',
       });
 
       try {
-        const borderInfo = await detectVideoBorders(videoPath, 3);
-        if (borderInfo.hasBorders) {
-          borderCropFilter = generateCropFilter(borderInfo);
-          console.log('[FFmpeg] Border detection: will crop', borderCropFilter);
+        // First try motion detection (better for videos with static overlays)
+        const motionArea = await detectMotionArea(videoPath, 6);
+        
+        if (motionArea.hasStaticBorders) {
+          borderCropFilter = generateMotionCropFilter(motionArea);
+          console.log('[FFmpeg] Motion detection: will crop', borderCropFilter);
           onProgress({
             videoPath,
             progress: 2,
             stage: 'analyzing',
-            message: `Moldura detectada (${borderInfo.originalWidth}→${borderInfo.width}px). Removendo...`,
+            message: `Área de vídeo detectada (${motionArea.width}x${motionArea.height}). Recortando...`,
           });
         } else {
-          console.log('[FFmpeg] Border detection: no borders found');
+          // Fallback to simple border detection
+          console.log('[FFmpeg] Motion detection: no static areas, trying border detection...');
+          const borderInfo = await detectVideoBorders(videoPath, 3);
+          if (borderInfo.hasBorders) {
+            borderCropFilter = generateCropFilter(borderInfo);
+            console.log('[FFmpeg] Border detection: will crop', borderCropFilter);
+            onProgress({
+              videoPath,
+              progress: 2,
+              stage: 'analyzing',
+              message: `Moldura detectada (${borderInfo.originalWidth}→${borderInfo.width}px). Removendo...`,
+            });
+          } else {
+            console.log('[FFmpeg] No borders or static content found');
+          }
         }
       } catch (cropErr) {
-        console.warn('[FFmpeg] Border detection failed, continuing without pre-crop:', cropErr);
+        console.warn('[FFmpeg] Content detection failed, continuing without pre-crop:', cropErr);
       }
 
       // STEP 2: AI Framing - analyze content and determine optimal positioning
