@@ -428,11 +428,20 @@ export function processVideo(
       const expandedAspect = expandedWidth / expandedHeight;
 
       // Build the scaling expression for TRUE cover mode:
-      // 1. Compare source aspect ratio with target aspect ratio
-      // 2. If source is wider than target, scale to fill HEIGHT (video will be wider than needed)
-      // 3. If source is taller than target, scale to fill WIDTH (video will be taller than needed)
-      // 4. This guarantees the scaled video is >= target in BOTH dimensions
-      const scaleExpr = `scale=w='if(gt(a,${expandedAspect}),max(${expandedWidth},ceil(${expandedHeight}*a/2)*2),${expandedWidth})':h='if(gt(a,${expandedAspect}),${expandedHeight},max(${expandedHeight},ceil(${expandedWidth}/a/2)*2))':force_original_aspect_ratio=increase`;
+      // CRITICAL: Force the video to be AT LEAST as big as target in BOTH dimensions
+      // This is a true "cover" mode - video will overflow one dimension and we'll crop
+      // Formula:
+      //   If source_aspect > target_aspect (source is wider):
+      //     Scale by height: h=targetH, w=h*source_aspect (will be > targetW)
+      //   Else (source is taller):
+      //     Scale by width: w=targetW, h=w/source_aspect (will be > targetH)
+      // We use -1 for the auto-calculated dimension to maintain aspect ratio
+      // Then we explicitly set the minimum size to guarantee coverage
+      
+      // Simpler, more reliable approach: scale to cover, then crop
+      // scale2ref would be ideal but we need to ensure minimum size
+      // Using iw/ih (input width/height) and 'a' (aspect ratio = iw/ih)
+      const scaleExpr = `scale='max(${expandedWidth},ceil(${expandedHeight}*iw/ih/2)*2)':'max(${expandedHeight},ceil(${expandedWidth}*ih/iw/2)*2)'`;
 
       // Calculate crop position based on AI anchor points
       // anchorX: 0=left, 0.5=center, 1=right
@@ -440,22 +449,18 @@ export function processVideo(
       // For FFmpeg crop: crop=w:h:x:y where x and y are the top-left corner of the crop area
       // When anchorY=0 (top), we want y=0 (keep top)
       // When anchorY=1 (bottom), we want y=(ih-height) (keep bottom)
-      // Calculate crop position - FFmpeg crop filter needs simple expressions
-      // Use fixed values based on AI anchor points to avoid complex expression parsing issues
-      // The actual crop position will be calculated relative to scaled video dimensions
-      // For FFmpeg, we use a simpler expression with the crop filter's built-in variables
-      // cropX = (iw - ow) * anchorX  -- where ow is output width (expandedWidth)
-      // cropY = (ih - oh) * anchorY  -- where oh is output height (expandedHeight)
+      // cropX = (scaled_width - target_width) * anchorX
+      // cropY = (scaled_height - target_height) * anchorY
       
-      // Simplified crop expression that FFmpeg can parse correctly
-      // Using 'out_w' and 'out_h' would require setting them first, so we use the literal values
+      // FFmpeg crop filter: iw/ih refer to input dimensions (after scale)
+      // We need to calculate how much to offset based on the anchor
       const cropXExpr = `'(iw-${expandedWidth})*${aiOffsetX}'`;
       const cropYExpr = `'(ih-${expandedHeight})*${aiOffsetY}'`;
 
       const filterComplex = [
-        // Scale video to cover the green area (true cover mode with overflow)
-        // Then crop to exact size using AI-determined anchor points
-        // Also convert colorspace to sRGB for consistency with template
+        // Step 1: Scale video to COVER the target area (one dimension matches, other exceeds)
+        // Step 2: Crop to exact size using AI-determined anchor points (focus on face)
+        // Step 3: Set SAR=1 and convert to RGB for template compatibility
         `[0:v]${scaleExpr},crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr},setsar=1,format=rgb24[vid]`,
         // Template with chroma key - use tighter tolerance for cleaner edges
         `[1:v]scale=1080:1920,format=rgb24,chromakey=0x00FF00:0.25:0.08[mask]`,
