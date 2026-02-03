@@ -4,6 +4,16 @@ import { existsSync } from 'fs';
 import { app } from 'electron';
 import { extractFirstFrame, analyzeVideoFrame, calculateSmartPosition, getDefaultAnalysis, type FrameAnalysis } from './aiFraming';
 
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0.5;
+  return Math.min(1, Math.max(0, n));
+}
+
+function makeEven(n: number): number {
+  const v = Math.round(n);
+  return v % 2 === 0 ? v : v + 1;
+}
+
 export interface GPUInfo {
   hasNvidia: boolean;
   hasIntelQSV: boolean;
@@ -302,6 +312,41 @@ async function getVideoDimensions(videoPath: string): Promise<{ width: number; h
   });
 }
 
+async function getImageDimensions(imagePath: string): Promise<{ width: number; height: number } | null> {
+  const ffmpegPath = getFFmpegPath();
+  const ffprobePath = ffmpegPath.replace(/ffmpeg(\.exe)?$/, 'ffprobe$1');
+
+  return new Promise((resolve) => {
+    const args = [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height',
+      '-of', 'csv=p=0',
+      imagePath,
+    ];
+
+    let stdout = '';
+    const ffprobe = spawn(ffprobePath, args);
+
+    ffprobe.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    ffprobe.on('close', (code) => {
+      if (code === 0 && stdout.trim()) {
+        const [width, height] = stdout.trim().split(',').map(Number);
+        if (width && height) {
+          resolve({ width, height });
+          return;
+        }
+      }
+      resolve(null);
+    });
+
+    ffprobe.on('error', () => resolve(null));
+  });
+}
+
 /**
  * Process a video with FFmpeg using GPU acceleration
  */
@@ -355,6 +400,12 @@ export function processVideo(
       let aiOffsetX = 0;
       let aiOffsetY = 0;
 
+       // Resolve output canvas size from the actual template file.
+       // This keeps overlay coordinates (greenArea x/y) consistent across any template resolution.
+       const templateDims = await getImageDimensions(templatePath);
+       const outW = templateDims?.width ?? 1080;
+       const outH = templateDims?.height ?? 1920;
+
       // If AI framing is enabled, analyze the first frame
       if (settings.useAiFraming) {
         onProgress({
@@ -383,11 +434,14 @@ export function processVideo(
             frameAnalysis
           );
 
-          // For FFmpeg, we need to calculate the crop offset based on AI anchor points
-          // The smart position gives us pixel offsets, but we need to convert to FFmpeg crop expression
-          // The anchorX/Y values (0-1) determine where to crop from
-          aiOffsetX = frameAnalysis.suggestedCrop.anchorX;
-          aiOffsetY = frameAnalysis.suggestedCrop.anchorY;
+           // For FFmpeg, we use anchor points (0-1) to decide how we crop within the scaled image.
+           // Clamp to prevent invalid values from generating out-of-range crop expressions.
+           aiOffsetX = clamp01(frameAnalysis.suggestedCrop.anchorX);
+           aiOffsetY = clamp01(frameAnalysis.suggestedCrop.anchorY);
+
+           // Slight top-bias: user wants a bit more focus on the top/rostos.
+           // Smaller anchorY = keep more of the top.
+           aiOffsetY = clamp01(aiOffsetY * 0.85);
 
           onProgress({
             videoPath,
@@ -413,19 +467,21 @@ export function processVideo(
         aiOffsetY = 0.5; // Center crop when AI is disabled
       }
 
+      // Final clamp (covers both AI and non-AI paths)
+      aiOffsetX = clamp01(aiOffsetX);
+      aiOffsetY = clamp01(aiOffsetY);
+
       // Build filter complex for chroma key + overlay
       // IMPORTANT:
       // - Template PNG must have transparent pixels where the video should appear (green area).
       // - We overlay the video first on a black background, then overlay the template on top.
       // - The template's green pixels are removed via chromakey, revealing the video below.
       // - Apply margin (2px) to avoid green edge artifacts.
-      const targetAspect = width / height;
       const margin = 2; // Safety margin to hide green edge pixels
 
       // Expand target dimensions slightly to ensure complete coverage (avoid any black borders)
-      const expandedWidth = width + (margin * 2);
-      const expandedHeight = height + (margin * 2);
-      const expandedAspect = expandedWidth / expandedHeight;
+      const expandedWidth = makeEven(width + (margin * 2));
+      const expandedHeight = makeEven(height + (margin * 2));
 
       // TRUE "cover" mode (cross-machine reliable):
       // Some FFmpeg builds/hardware paths can round the computed dimension DOWN by 1-2px when
@@ -437,8 +493,8 @@ export function processVideo(
       // 2) crop back to the exact expanded size using the AI anchors
       //
       // Keep everything EVEN to satisfy encoders.
-      const safeWidth = expandedWidth + 4;
-      const safeHeight = expandedHeight + 4;
+      const safeWidth = makeEven(expandedWidth + 4);
+      const safeHeight = makeEven(expandedHeight + 4);
       const scaleExpr = `scale=${safeWidth}:${safeHeight}:force_original_aspect_ratio=increase`;
 
       // Calculate crop position based on AI anchor points
@@ -452,8 +508,9 @@ export function processVideo(
       
       // FFmpeg crop filter: iw/ih refer to input dimensions (after scale)
       // We need to calculate how much to offset based on the anchor
-      const cropXExpr = `'(iw-${expandedWidth})*${aiOffsetX}'`;
-      const cropYExpr = `'(ih-${expandedHeight})*${aiOffsetY}'`;
+      // Use floor() to avoid subpixel rounding differences between FFmpeg builds/hardware paths.
+      const cropXExpr = `floor((iw-${expandedWidth})*${aiOffsetX})`;
+      const cropYExpr = `floor((ih-${expandedHeight})*${aiOffsetY})`;
 
       const filterComplex = [
         // Step 1: Scale video to COVER the target area (one dimension matches, other exceeds)
@@ -461,9 +518,9 @@ export function processVideo(
         // Step 3: Set SAR=1 and convert to RGB for template compatibility
         `[0:v]${scaleExpr},crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr},setsar=1,format=rgb24[vid]`,
         // Template with chroma key - use tighter tolerance for cleaner edges
-        `[1:v]scale=1080:1920,format=rgb24,chromakey=0x00FF00:0.25:0.08[mask]`,
+        `[1:v]scale=${outW}:${outH},format=rgb24,chromakey=0x00FF00:0.25:0.08[mask]`,
         // Infinite black background
-        `color=black:s=1080x1920[bg]`,
+        `color=black:s=${outW}x${outH}[bg]`,
         // Overlay video in green area (slightly oversized to cover completely with margin overlap)
         `[bg][vid]overlay=${x}:${y}:shortest=1[base]`,
         // Overlay template on top
