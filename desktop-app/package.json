@@ -45,7 +45,9 @@
       "output": "release"
     },
     "files": [
-      "dist/**/*"
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json"
     ],
     "extraResources": [
       {
