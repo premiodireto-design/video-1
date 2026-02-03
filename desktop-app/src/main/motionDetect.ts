@@ -137,8 +137,23 @@ export async function detectMotionArea(
         ];
 
         const proc = spawn(ffmpegPath, args);
-        proc.on('close', () => resolve());
-        proc.on('error', () => resolve());
+        
+        // Timeout de 15 segundos por frame
+        const timeout = setTimeout(() => {
+          console.log(`[MotionDetect] Frame ${i} extraction timeout, killing process`);
+          try { proc.kill('SIGKILL'); } catch {}
+          resolve();
+        }, 15000);
+
+        proc.on('close', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        proc.on('error', (err) => {
+          console.log(`[MotionDetect] Frame ${i} extraction error:`, err.message);
+          clearTimeout(timeout);
+          resolve();
+        });
       }));
     }
 
@@ -264,12 +279,20 @@ async function analyzeMotionWithFFmpeg(
     console.log('[MotionDetect] Creating motion difference image...');
     const proc = spawn(ffmpegPath, args);
 
+    // Timeout de 30 segundos para a análise de movimento
+    const timeout = setTimeout(async () => {
+      console.log('[MotionDetect] Motion analysis timeout, killing process');
+      try { proc.kill('SIGKILL'); } catch {}
+      resolve(await fallbackCropDetect(framePaths[0], originalWidth, originalHeight, ffmpegPath));
+    }, 30000);
+
     let stderr = '';
     proc.stderr.on('data', (data) => {
       stderr += data.toString();
     });
 
     proc.on('close', async (code) => {
+      clearTimeout(timeout);
       if (code !== 0 || !existsSync(diffPath)) {
         console.log('[MotionDetect] Motion diff failed, trying cropdetect fallback');
         resolve(await fallbackCropDetect(framePaths[0], originalWidth, originalHeight, ffmpegPath));
@@ -287,6 +310,7 @@ async function analyzeMotionWithFFmpeg(
     });
 
     proc.on('error', async () => {
+      clearTimeout(timeout);
       resolve(await fallbackCropDetect(framePaths[0], originalWidth, originalHeight, ffmpegPath));
     });
   });
@@ -315,6 +339,20 @@ async function detectCropFromDiff(
     console.log('[MotionDetect] Running cropdetect on motion diff...');
     const proc = spawn(ffmpegPath, args);
 
+    // Timeout de 15 segundos
+    const timeout = setTimeout(() => {
+      console.log('[MotionDetect] Cropdetect timeout, using full frame');
+      try { proc.kill('SIGKILL'); } catch {}
+      resolve({
+        x: 0, y: 0,
+        width: originalWidth,
+        height: originalHeight,
+        originalWidth,
+        originalHeight,
+        hasStaticBorders: false,
+      });
+    }, 15000);
+
     let stderr = '';
     const cropMatches: Array<{ w: number; h: number; x: number; y: number }> = [];
 
@@ -331,6 +369,7 @@ async function detectCropFromDiff(
     });
 
     proc.on('close', () => {
+      clearTimeout(timeout);
       if (cropMatches.length === 0) {
         console.log('[MotionDetect] No motion crop detected, using full frame');
         resolve({
@@ -378,6 +417,7 @@ async function detectCropFromDiff(
     });
 
     proc.on('error', () => {
+      clearTimeout(timeout);
       resolve({
         x: 0, y: 0,
         width: originalWidth,
@@ -408,7 +448,23 @@ async function fallbackCropDetect(
       '-',
     ];
 
+    console.log('[MotionDetect] Running fallback cropdetect...');
     const proc = spawn(ffmpegPath, args);
+
+    // Timeout de 15 segundos
+    const timeout = setTimeout(() => {
+      console.log('[MotionDetect] Fallback cropdetect timeout');
+      try { proc.kill('SIGKILL'); } catch {}
+      resolve({
+        x: 0, y: 0,
+        width: originalWidth,
+        height: originalHeight,
+        originalWidth,
+        originalHeight,
+        hasStaticBorders: false,
+      });
+    }, 15000);
+
     const cropMatches: Array<{ w: number; h: number; x: number; y: number }> = [];
 
     proc.stderr.on('data', (data: Buffer) => {
@@ -423,6 +479,7 @@ async function fallbackCropDetect(
     });
 
     proc.on('close', () => {
+      clearTimeout(timeout);
       if (cropMatches.length === 0) {
         resolve({
           x: 0, y: 0,
@@ -452,6 +509,7 @@ async function fallbackCropDetect(
     });
 
     proc.on('error', () => {
+      clearTimeout(timeout);
       resolve({
         x: 0, y: 0,
         width: originalWidth,
