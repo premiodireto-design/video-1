@@ -3,6 +3,7 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { app } from 'electron';
 import { extractFirstFrame, analyzeVideoFrame, calculateSmartPosition, getDefaultAnalysis, type FrameAnalysis } from './aiFraming';
+import { detectVideoBorders, generateCropFilter, type CropInfo } from './videoCropDetect';
 
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0.5;
@@ -399,6 +400,7 @@ export function processVideo(
       let frameAnalysis: FrameAnalysis | null = null;
       let aiOffsetX = 0;
       let aiOffsetY = 0;
+      let borderCropFilter: string | null = null;
 
        // Resolve output canvas size from the actual template file.
        // This keeps overlay coordinates (greenArea x/y) consistent across any template resolution.
@@ -406,17 +408,44 @@ export function processVideo(
        const outW = templateDims?.width ?? 1080;
        const outH = templateDims?.height ?? 1920;
 
-      // If AI framing is enabled, analyze the first frame
+      // STEP 1: Detect and remove any black/white borders from the video
+      // This runs before AI analysis to ensure we're analyzing clean content
+      onProgress({
+        videoPath,
+        progress: 0,
+        stage: 'analyzing',
+        message: 'Detectando molduras no vídeo...',
+      });
+
+      try {
+        const borderInfo = await detectVideoBorders(videoPath, 3);
+        if (borderInfo.hasBorders) {
+          borderCropFilter = generateCropFilter(borderInfo);
+          console.log('[FFmpeg] Border detection: will crop', borderCropFilter);
+          onProgress({
+            videoPath,
+            progress: 2,
+            stage: 'analyzing',
+            message: `Moldura detectada (${borderInfo.originalWidth}→${borderInfo.width}px). Removendo...`,
+          });
+        } else {
+          console.log('[FFmpeg] Border detection: no borders found');
+        }
+      } catch (cropErr) {
+        console.warn('[FFmpeg] Border detection failed, continuing without pre-crop:', cropErr);
+      }
+
+      // STEP 2: AI Framing - analyze content and determine optimal positioning
       if (settings.useAiFraming) {
         onProgress({
           videoPath,
-          progress: 0,
+          progress: 3,
           stage: 'analyzing',
           message: 'Analisando vídeo com IA...',
         });
 
         try {
-          // Get video dimensions first
+          // Get video dimensions first (post-crop dimensions if borders were detected)
           const videoDims = await getVideoDimensions(videoPath);
           console.log('[FFmpeg] Video dimensions:', videoDims);
 
@@ -459,7 +488,7 @@ export function processVideo(
       } else {
         onProgress({
           videoPath,
-          progress: 0,
+          progress: 3,
           stage: 'analyzing',
           message: 'Analisando vídeo...',
         });
@@ -512,11 +541,22 @@ export function processVideo(
       const cropXExpr = `floor((iw-${expandedWidth})*${aiOffsetX})`;
       const cropYExpr = `floor((ih-${expandedHeight})*${aiOffsetY})`;
 
+      // Build the video filter chain:
+      // 1. If borders detected: crop them out first
+      // 2. Scale to cover target area (with over-scale for safety)
+      // 3. Crop to exact size using AI anchors
+      // 4. Convert to RGB for template compatibility
+      const videoPipeline = [
+        borderCropFilter, // null if no borders (will be filtered out)
+        scaleExpr,
+        `crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr}`,
+        'setsar=1',
+        'format=rgb24',
+      ].filter(Boolean).join(',');
+
       const filterComplex = [
-        // Step 1: Scale video to COVER the target area (one dimension matches, other exceeds)
-        // Step 2: Crop to exact size using AI-determined anchor points (focus on face)
-        // Step 3: Set SAR=1 and convert to RGB for template compatibility
-        `[0:v]${scaleExpr},crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr},setsar=1,format=rgb24[vid]`,
+        // Step 1: Process video (remove borders → scale → crop → format)
+        `[0:v]${videoPipeline}[vid]`,
         // Template with chroma key - use tighter tolerance for cleaner edges
         `[1:v]scale=${outW}:${outH},format=rgb24,chromakey=0x00FF00:0.25:0.08[mask]`,
         // Infinite black background
