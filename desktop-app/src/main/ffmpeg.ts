@@ -430,18 +430,25 @@ export function processVideo(
       // Build the scaling expression for TRUE cover mode:
       // CRITICAL: Force the video to be AT LEAST as big as target in BOTH dimensions
       // This is a true "cover" mode - video will overflow one dimension and we'll crop
-      // Formula:
-      //   If source_aspect > target_aspect (source is wider):
-      //     Scale by height: h=targetH, w=h*source_aspect (will be > targetW)
-      //   Else (source is taller):
-      //     Scale by width: w=targetW, h=w/source_aspect (will be > targetH)
-      // We use -1 for the auto-calculated dimension to maintain aspect ratio
-      // Then we explicitly set the minimum size to guarantee coverage
+      // 
+      // The problem with the previous formula was using max() with ceil() which could
+      // still produce values smaller than needed due to integer rounding.
+      //
+      // NEW APPROACH: Use if/else to scale by the LIMITING dimension
+      // - If video aspect > target aspect (video is wider): scale by HEIGHT
+      // - If video aspect <= target aspect (video is taller): scale by WIDTH
+      // This guarantees the other dimension will be >= target
+      //
+      // FFmpeg 'a' variable = iw/ih (input aspect ratio)
+      // We add +2 padding to each dimension to ensure complete coverage after rounding
+      const safeWidth = expandedWidth + 2;
+      const safeHeight = expandedHeight + 2;
       
-      // Simpler, more reliable approach: scale to cover, then crop
-      // scale2ref would be ideal but we need to ensure minimum size
-      // Using iw/ih (input width/height) and 'a' (aspect ratio = iw/ih)
-      const scaleExpr = `scale='max(${expandedWidth},ceil(${expandedHeight}*iw/ih/2)*2)':'max(${expandedHeight},ceil(${expandedWidth}*ih/iw/2)*2)'`;
+      // Scale expression using if() to choose the right scaling strategy
+      // When scaling by height: w=-2 (auto), h=safeHeight -> guarantees h, w will be >= safeWidth
+      // When scaling by width: w=safeWidth, h=-2 (auto) -> guarantees w, h will be >= safeHeight
+      // We use -2 instead of -1 to ensure even dimensions (required by many encoders)
+      const scaleExpr = `scale=w='if(gt(iw/ih,${expandedWidth}/${expandedHeight}),-2,${safeWidth})':h='if(gt(iw/ih,${expandedWidth}/${expandedHeight}),${safeHeight},-2)'`;
 
       // Calculate crop position based on AI anchor points
       // anchorX: 0=left, 0.5=center, 1=right
