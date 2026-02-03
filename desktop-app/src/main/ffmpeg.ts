@@ -444,11 +444,14 @@ export function processVideo(
       const safeWidth = expandedWidth + 2;
       const safeHeight = expandedHeight + 2;
       
-      // Scale expression using if() to choose the right scaling strategy
-      // When scaling by height: w=-2 (auto), h=safeHeight -> guarantees h, w will be >= safeWidth
-      // When scaling by width: w=safeWidth, h=-2 (auto) -> guarantees w, h will be >= safeHeight
-      // We use -2 instead of -1 to ensure even dimensions (required by many encoders)
-      const scaleExpr = `scale=w='if(gt(iw/ih,${expandedWidth}/${expandedHeight}),-2,${safeWidth})':h='if(gt(iw/ih,${expandedWidth}/${expandedHeight}),${safeHeight},-2)'`;
+      // Scale expression using if() to choose the right scaling strategy.
+      // IMPORTANT: Avoid relying on -2 auto-dimension rounding, which can truncate down and end up
+      // a couple pixels SMALLER than needed on some builds/hardware (revealing the black bg).
+      //
+      // Use explicit ceil(.../2)*2 to force the computed dimension to be EVEN and never underflow.
+      // 'a' is the input aspect ratio (iw/ih).
+      const targetAr = expandedWidth / expandedHeight;
+      const scaleExpr = `scale=w='if(gt(a,${targetAr}),ceil(${safeHeight}*a/2)*2,${safeWidth})':h='if(gt(a,${targetAr}),${safeHeight},ceil(${safeWidth}/a/2)*2)'`;
 
       // Calculate crop position based on AI anchor points
       // anchorX: 0=left, 0.5=center, 1=right
