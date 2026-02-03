@@ -5,6 +5,7 @@ import { app } from 'electron';
 import { extractFirstFrame, analyzeVideoFrame, calculateSmartPosition, getDefaultAnalysis, type FrameAnalysis } from './aiFraming';
 import { detectVideoBorders, generateCropFilter, type CropInfo } from './videoCropDetect';
 import { detectMotionArea, generateMotionCropFilter, type MotionArea } from './motionDetect';
+import { detectSmartCrop, generateSmartCropFilter, type SmartCropInfo } from './smartCrop';
 
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0.5;
@@ -364,7 +365,8 @@ export function processVideo(
       quality: 'fast' | 'balanced' | 'quality';
       trimStart: number;
       trimEnd: number;
-      useAiFraming?: boolean; // NEW: Use AI to detect faces and position video
+      useAiFraming?: boolean; // Use AI to detect faces and position video
+      useSmartCrop?: boolean; // Use smart crop to remove borders of any color
     };
   },
   onProgress: (progress: ProcessingProgress) => void
@@ -409,47 +411,44 @@ export function processVideo(
        const outW = templateDims?.width ?? 1080;
        const outH = templateDims?.height ?? 1920;
 
-      // STEP 1: Detect motion area to find real video content
-      // This removes static overlays (text, logos) AND black borders
-      onProgress({
-        videoPath,
-        progress: 0,
-        stage: 'analyzing',
-        message: 'Detectando área de conteúdo do vídeo...',
-      });
+      // STEP 1: Detect and remove borders/frames (if Smart Crop is enabled)
+      // This MUST happen BEFORE AI framing so the AI only sees actual content
+      if (settings.useSmartCrop) {
+        onProgress({
+          videoPath,
+          progress: 0,
+          stage: 'analyzing',
+          message: 'Detectando molduras/bordas (qualquer cor)...',
+        });
 
-      try {
-        // First try motion detection (better for videos with static overlays)
-        const motionArea = await detectMotionArea(videoPath, 6);
-        
-        if (motionArea.hasStaticBorders) {
-          borderCropFilter = generateMotionCropFilter(motionArea);
-          console.log('[FFmpeg] Motion detection: will crop', borderCropFilter);
-          onProgress({
-            videoPath,
-            progress: 2,
-            stage: 'analyzing',
-            message: `Área de vídeo detectada (${motionArea.width}x${motionArea.height}). Recortando...`,
-          });
-        } else {
-          // Fallback to simple border detection
-          console.log('[FFmpeg] Motion detection: no static areas, trying border detection...');
-          const borderInfo = await detectVideoBorders(videoPath, 3);
-          if (borderInfo.hasBorders) {
-            borderCropFilter = generateCropFilter(borderInfo);
-            console.log('[FFmpeg] Border detection: will crop', borderCropFilter);
+        try {
+          // Use Smart Crop with edgedetect - works with ANY color borders
+          console.log('[FFmpeg] Smart Crop: Starting edge detection...');
+          const smartCropInfo = await detectSmartCrop(videoPath, 5);
+          
+          if (smartCropInfo.hasBorders) {
+            borderCropFilter = generateSmartCropFilter(smartCropInfo);
+            console.log(`[FFmpeg] Smart Crop: Found borders (${smartCropInfo.detectionMethod}), will crop:`, borderCropFilter);
             onProgress({
               videoPath,
               progress: 2,
               stage: 'analyzing',
-              message: `Moldura detectada (${borderInfo.originalWidth}→${borderInfo.width}px). Removendo...`,
+              message: `Moldura detectada (${smartCropInfo.originalWidth}x${smartCropInfo.originalHeight} → ${smartCropInfo.width}x${smartCropInfo.height}). Removendo...`,
             });
           } else {
-            console.log('[FFmpeg] No borders or static content found');
+            console.log('[FFmpeg] Smart Crop: No significant borders found');
+            onProgress({
+              videoPath,
+              progress: 2,
+              stage: 'analyzing',
+              message: 'Nenhuma moldura detectada.',
+            });
           }
+        } catch (cropErr) {
+          console.warn('[FFmpeg] Smart Crop failed, continuing without pre-crop:', cropErr);
         }
-      } catch (cropErr) {
-        console.warn('[FFmpeg] Content detection failed, continuing without pre-crop:', cropErr);
+      } else {
+        console.log('[FFmpeg] Smart Crop disabled, skipping border detection');
       }
 
       // STEP 2: AI Framing - analyze content and determine optimal positioning
