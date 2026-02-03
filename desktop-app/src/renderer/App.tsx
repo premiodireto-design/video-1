@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Tutorial } from './components/Tutorial';
+import { UpdateNotification } from './components/UpdateNotification';
 
 interface GPUInfo {
   hasNvidia: boolean;
@@ -167,6 +168,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen p-6">
+      {/* Auto-update notification */}
+      <UpdateNotification />
+
       {/* Tutorial Modal */}
       {showTutorial && <Tutorial onClose={() => setShowTutorial(false)} />}
 

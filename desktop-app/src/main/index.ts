@@ -3,6 +3,8 @@ import { join } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 import { processVideo, detectGPU, type GPUInfo } from './ffmpeg';
 import { detectGreenArea, type DetectionResult, type GreenArea } from './greenDetection';
+import { initAutoUpdater } from './autoUpdater';
+
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): void {
@@ -28,6 +30,11 @@ function createWindow(): void {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
+  }
+
+  // Initialize auto-updater (only in production)
+  if (!is.dev) {
+    initAutoUpdater(mainWindow);
   }
 }
 

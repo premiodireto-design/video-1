@@ -1,0 +1,117 @@
+name: Build Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags like v1.0.0
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+          # Uncomment for Mac/Linux builds:
+          # - os: macos-latest
+          #   platform: mac
+          # - os: ubuntu-latest
+          #   platform: linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: desktop-app/package-lock.json
+
+      - name: Download FFmpeg (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          $ffmpegZip = "ffmpeg.zip"
+          $ffmpegDir = "desktop-app/ffmpeg-bin"
+          
+          Write-Host "Downloading FFmpeg..."
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile $ffmpegZip
+          
+          Write-Host "Extracting FFmpeg..."
+          Expand-Archive -Path $ffmpegZip -DestinationPath "ffmpeg-temp" -Force
+          
+          Write-Host "Creating ffmpeg-bin directory..."
+          New-Item -ItemType Directory -Path $ffmpegDir -Force
+          
+          Write-Host "Copying FFmpeg binaries..."
+          $ffmpegBin = Get-ChildItem -Path "ffmpeg-temp" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          $ffprobeBin = Get-ChildItem -Path "ffmpeg-temp" -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+          
+          Copy-Item $ffmpegBin.FullName -Destination "$ffmpegDir/ffmpeg.exe"
+          Copy-Item $ffprobeBin.FullName -Destination "$ffmpegDir/ffprobe.exe"
+          
+          Write-Host "FFmpeg setup complete!"
+          Get-ChildItem $ffmpegDir
+
+      - name: Download FFmpeg (macOS)
+        if: matrix.platform == 'mac'
+        run: |
+          brew install ffmpeg
+          mkdir -p desktop-app/ffmpeg-bin
+          cp $(which ffmpeg) desktop-app/ffmpeg-bin/
+          cp $(which ffprobe) desktop-app/ffmpeg-bin/
+
+      - name: Download FFmpeg (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          mkdir -p desktop-app/ffmpeg-bin
+          cp $(which ffmpeg) desktop-app/ffmpeg-bin/
+          cp $(which ffprobe) desktop-app/ffmpeg-bin/
+
+      - name: Install dependencies
+        working-directory: desktop-app
+        run: npm ci
+
+      - name: Build application
+        working-directory: desktop-app
+        run: npm run build
+
+      - name: Package application (Windows)
+        if: matrix.platform == 'win'
+        working-directory: desktop-app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --publish always
+
+      - name: Package application (macOS)
+        if: matrix.platform == 'mac'
+        working-directory: desktop-app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac --publish always
+
+      - name: Package application (Linux)
+        if: matrix.platform == 'linux'
+        working-directory: desktop-app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux --publish always
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: |
+            desktop-app/release/*.exe
+            desktop-app/release/*.dmg
+            desktop-app/release/*.AppImage
+            desktop-app/release/*.deb
+          if-no-files-found: warn
