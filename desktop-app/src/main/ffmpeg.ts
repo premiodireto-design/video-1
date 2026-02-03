@@ -427,31 +427,19 @@ export function processVideo(
       const expandedHeight = height + (margin * 2);
       const expandedAspect = expandedWidth / expandedHeight;
 
-      // Build the scaling expression for TRUE cover mode:
-      // CRITICAL: Force the video to be AT LEAST as big as target in BOTH dimensions
-      // This is a true "cover" mode - video will overflow one dimension and we'll crop
-      // 
-      // The problem with the previous formula was using max() with ceil() which could
-      // still produce values smaller than needed due to integer rounding.
+      // TRUE "cover" mode (cross-machine reliable):
+      // Some FFmpeg builds/hardware paths can round the computed dimension DOWN by 1-2px when
+      // using expression-based scale. That underflow reveals the black background as a "barra preta".
       //
-      // NEW APPROACH: Use if/else to scale by the LIMITING dimension
-      // - If video aspect > target aspect (video is wider): scale by HEIGHT
-      // - If video aspect <= target aspect (video is taller): scale by WIDTH
-      // This guarantees the other dimension will be >= target
+      // More robust strategy:
+      // 1) scale to a size SLIGHTLY bigger than we need (safeW/safeH)
+      //    using force_original_aspect_ratio=increase (guarantees cover)
+      // 2) crop back to the exact expanded size using the AI anchors
       //
-      // FFmpeg 'a' variable = iw/ih (input aspect ratio)
-      // We add +2 padding to each dimension to ensure complete coverage after rounding
-      const safeWidth = expandedWidth + 2;
-      const safeHeight = expandedHeight + 2;
-      
-      // Scale expression using if() to choose the right scaling strategy.
-      // IMPORTANT: Avoid relying on -2 auto-dimension rounding, which can truncate down and end up
-      // a couple pixels SMALLER than needed on some builds/hardware (revealing the black bg).
-      //
-      // Use explicit ceil(.../2)*2 to force the computed dimension to be EVEN and never underflow.
-      // 'a' is the input aspect ratio (iw/ih).
-      const targetAr = expandedWidth / expandedHeight;
-      const scaleExpr = `scale=w='if(gt(a,${targetAr}),ceil(${safeHeight}*a/2)*2,${safeWidth})':h='if(gt(a,${targetAr}),${safeHeight},ceil(${safeWidth}/a/2)*2)'`;
+      // Keep everything EVEN to satisfy encoders.
+      const safeWidth = expandedWidth + 4;
+      const safeHeight = expandedHeight + 4;
+      const scaleExpr = `scale=${safeWidth}:${safeHeight}:force_original_aspect_ratio=increase`;
 
       // Calculate crop position based on AI anchor points
       // anchorX: 0=left, 0.5=center, 1=right
