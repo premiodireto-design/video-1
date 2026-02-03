@@ -43,7 +43,6 @@ export interface ElectronAPI {
       trimStart: number;
       trimEnd: number;
       useAiFraming?: boolean;
-      useSmartCrop?: boolean; // Smart crop for removing borders of any color
     };
   }) => Promise<{ success: boolean; outputPath?: string; error?: string }>;
   onVideoProgress: (callback: (progress: {

@@ -35,7 +35,6 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [useGPU, setUseGPU] = useState(true);
   const [useAiFraming, setUseAiFraming] = useState(true); // AI framing enabled by default
-  const [useSmartCrop, setUseSmartCrop] = useState(true); // Smart crop enabled by default
   const [quality, setQuality] = useState<'fast' | 'balanced' | 'quality'>('balanced');
 
   useEffect(() => {
@@ -125,7 +124,6 @@ export default function App() {
             trimStart: 0.5,
             trimEnd: 0.5,
             useAiFraming, // Pass AI framing setting
-            useSmartCrop, // Pass smart crop setting
           },
         });
       } catch (error) {
@@ -191,15 +189,6 @@ export default function App() {
             <span className="text-sm">
               {hasAnyGPU ? 'Usar GPU' : 'GPU não detectada'}
             </span>
-          </label>
-          <label className="flex items-center gap-2 ml-4">
-            <input
-              type="checkbox"
-              checked={useSmartCrop}
-              onChange={(e) => setUseSmartCrop(e.target.checked)}
-              className="w-4 h-4"
-            />
-            <span className="text-sm">✂️ Auto-Crop</span>
           </label>
           <label className="flex items-center gap-2 ml-4">
             <input
