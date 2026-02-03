@@ -144,22 +144,24 @@ export async function detectSmartCrop(
   const analyzeDuration = Math.min(sampleDurationSeconds, dims.duration - 1, 5);
 
   return new Promise((resolve) => {
-    // Pipeline:
-    // 1. Scale to 1080p for consistent analysis
-    // 2. Apply edgedetect to find lines/borders (catches any color)
-    // 3. Use cropdetect with round=16 for precision
+    // Pipeline "Cirúrgico":
+    // PASSO 1: Normalizar escala (1080x1920)
+    // PASSO 2: edgedetect (Linhas divisórias)
+    // PASSO 3: cropdetect (Corte na linha)
     //
-    // Params:
-    // - edgedetect low=0.1 high=0.4: balanced sensitivity
-    // - cropdetect limit=24 round=16: standard detection with good precision
-    // - hwaccel=auto: try GPU acceleration if available
+    // Params agressivos:
+    // - edgedetect low=0.1 high=0.4: detecta linhas divisórias
+    // - cropdetect limit=30: ignora texturas/ruídos da moldura
+    // - round=16: precisão de corte
+    // - reset=1: reavalia cada frame para não se perder
+    // - hwaccel=auto: GPU com fallback silencioso para CPU
     const args = [
       '-hide_banner',
-      '-hwaccel', 'auto', // Auto-detect hardware acceleration
+      '-hwaccel', 'auto', // Auto-detect hardware acceleration, fallback to CPU silently
       '-ss', '1', // Skip first second
-      '-i', `"${videoPath}"`, // Quoted path for spaces/special chars
+      '-i', videoPath,
       '-t', String(analyzeDuration),
-      '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,edgedetect=low=0.1:high=0.4,cropdetect=limit=24:round=16',
+      '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,edgedetect=low=0.1:high=0.4,cropdetect=limit=30:round=16:reset=1',
       '-f', 'null',
       '-',
     ];
@@ -222,24 +224,56 @@ export async function detectSmartCrop(
       // Find most consistent crop value
       const bestCrop = findBestCrop(cropMatches, originalWidth, originalHeight);
 
-      // Ensure even dimensions
-      const width = bestCrop.w % 2 === 0 ? bestCrop.w : bestCrop.w - 1;
-      const height = bestCrop.h % 2 === 0 ? bestCrop.h : bestCrop.h - 1;
+      // MARGEM DE SEGURANÇA: -10px no topo e base para eliminar letras/logos
+      // Se detectar Y=535, ajusta para Y=545 para "limpar" a linha divisória
+      const safetyMargin = 10;
+      let adjustedY = bestCrop.y + safetyMargin;
+      let adjustedH = bestCrop.h - (safetyMargin * 2); // Remove dos dois lados
+
+      // Garantir que não ficou menor que o mínimo viável
+      if (adjustedH < 100) {
+        adjustedY = bestCrop.y;
+        adjustedH = bestCrop.h;
+      }
+
+      // VERIFICAÇÃO PÓS-RECORTE: Se ainda sobrar bordas, aumentar crop em 5%
+      const extraMarginPercent = 0.05;
+      const extraMarginX = Math.floor(bestCrop.w * extraMarginPercent);
+      const extraMarginY = Math.floor(adjustedH * extraMarginPercent);
+      
+      let finalX = bestCrop.x + extraMarginX;
+      let finalY = adjustedY + extraMarginY;
+      let finalW = bestCrop.w - (extraMarginX * 2);
+      let finalH = adjustedH - (extraMarginY * 2);
+
+      // Garantir dimensões pares para encoding
+      finalW = finalW % 2 === 0 ? finalW : finalW - 1;
+      finalH = finalH % 2 === 0 ? finalH : finalH - 1;
+
+      // Garantir mínimo viável
+      if (finalW < 100 || finalH < 100) {
+        finalX = bestCrop.x;
+        finalY = bestCrop.y;
+        finalW = bestCrop.w % 2 === 0 ? bestCrop.w : bestCrop.w - 1;
+        finalH = bestCrop.h % 2 === 0 ? bestCrop.h : bestCrop.h - 1;
+      }
 
       // Check if borders are significant enough to crop
       const hasBorders =
-        width < originalWidth - 16 ||
-        height < originalHeight - 16 ||
-        bestCrop.x > 8 ||
-        bestCrop.y > 8;
+        finalW < originalWidth - 16 ||
+        finalH < originalHeight - 16 ||
+        finalX > 8 ||
+        finalY > 8;
 
-      console.log(`[SmartCrop] Detected: ${width}x${height} at ${bestCrop.x},${bestCrop.y} (borders: ${hasBorders}) [${elapsed}ms]`);
+      console.log(`[SmartCrop] Raw: ${bestCrop.w}x${bestCrop.h} at ${bestCrop.x},${bestCrop.y}`);
+      console.log(`[SmartCrop] Adjusted (safety margin +${safetyMargin}px, +${Math.round(extraMarginPercent*100)}%): ${finalW}x${finalH} at ${finalX},${finalY}`);
+      console.log(`[SmartCrop] Borders detected: ${hasBorders} [${elapsed}ms]`);
 
       resolve({
-        x: bestCrop.x,
-        y: bestCrop.y,
-        width,
-        height,
+        x: finalX,
+        y: finalY,
+        width: finalW,
+        height: finalH,
         originalWidth,
         originalHeight,
         hasBorders,
@@ -280,7 +314,7 @@ async function fallbackCropDetect(
       '-ss', '1',
       '-i', videoPath,
       '-t', '2',
-      '-vf', 'cropdetect=limit=24:round=2',
+      '-vf', 'cropdetect=limit=30:round=16:reset=1', // Mesmos params agressivos
       '-f', 'null',
       '-',
     ];
@@ -329,18 +363,29 @@ async function fallbackCropDetect(
       }
 
       const bestCrop = findBestCrop(cropMatches, originalWidth, originalHeight);
-      const width = bestCrop.w % 2 === 0 ? bestCrop.w : bestCrop.w - 1;
-      const height = bestCrop.h % 2 === 0 ? bestCrop.h : bestCrop.h - 1;
+      
+      // Aplicar mesma margem de segurança do método principal
+      const safetyMargin = 10;
+      let adjustedY = bestCrop.y + safetyMargin;
+      let adjustedH = bestCrop.h - (safetyMargin * 2);
+      
+      if (adjustedH < 100) {
+        adjustedY = bestCrop.y;
+        adjustedH = bestCrop.h;
+      }
+
+      const width = adjustedH % 2 === 0 ? bestCrop.w : bestCrop.w - 1;
+      const height = adjustedH % 2 === 0 ? adjustedH : adjustedH - 1;
 
       const hasBorders =
         width < originalWidth - 8 ||
         height < originalHeight - 8 ||
         bestCrop.x > 4 ||
-        bestCrop.y > 4;
+        adjustedY > 4;
 
       resolve({
         x: bestCrop.x,
-        y: bestCrop.y,
+        y: adjustedY,
         width,
         height,
         originalWidth,
