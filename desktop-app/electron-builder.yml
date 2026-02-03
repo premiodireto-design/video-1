@@ -8,6 +8,10 @@ directories:
 
 files:
   - dist/**/*
+  # Include runtime dependencies because we restrict the packaged files list.
+  # Without this, modules like `electron-updater` won't be available at runtime.
+  - node_modules/**/*
+  - package.json
 
 extraResources:
   - from: ffmpeg-bin/
