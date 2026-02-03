@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import { join } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 import { processVideo, detectGPU, type GPUInfo } from './ffmpeg';
-
+import { detectGreenArea, type DetectionResult, type GreenArea } from './greenDetection';
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): void {
@@ -69,15 +69,24 @@ ipcMain.handle('select-videos', async () => {
   return result.filePaths;
 });
 
-// Select template
-ipcMain.handle('select-template', async () => {
+// Select template and detect green area
+ipcMain.handle('select-template', async (): Promise<{ path: string; detection: DetectionResult } | null> => {
   const result = await dialog.showOpenDialog(mainWindow!, {
     properties: ['openFile'],
     filters: [
       { name: 'Images', extensions: ['png', 'jpg', 'jpeg'] },
     ],
   });
-  return result.filePaths[0] || null;
+  
+  const templatePath = result.filePaths[0];
+  if (!templatePath) return null;
+  
+  // Auto-detect the green area in the template
+  console.log('[IPC] Detecting green area in template:', templatePath);
+  const detection = await detectGreenArea(templatePath);
+  console.log('[IPC] Green area detection result:', detection);
+  
+  return { path: templatePath, detection };
 });
 
 // Select output folder

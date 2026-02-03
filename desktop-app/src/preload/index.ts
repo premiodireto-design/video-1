@@ -1,5 +1,25 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+export interface GreenArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DetectionResult {
+  success: boolean;
+  area?: GreenArea;
+  templateWidth?: number;
+  templateHeight?: number;
+  error?: string;
+}
+
+export interface TemplateSelection {
+  path: string;
+  detection: DetectionResult;
+}
+
 export interface ElectronAPI {
   detectGPU: () => Promise<{
     hasNvidia: boolean;
@@ -9,13 +29,13 @@ export interface ElectronAPI {
     availableEncoders: string[];
   }>;
   selectVideos: () => Promise<string[]>;
-  selectTemplate: () => Promise<string | null>;
+  selectTemplate: () => Promise<TemplateSelection | null>;
   selectOutputFolder: () => Promise<string | null>;
   processVideo: (options: {
     videoPath: string;
     templatePath: string;
     outputPath: string;
-    greenArea: { x: number; y: number; width: number; height: number };
+    greenArea: GreenArea;
     settings: {
       useGPU: boolean;
       encoder: string;

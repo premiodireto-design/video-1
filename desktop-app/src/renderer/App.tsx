@@ -8,6 +8,13 @@ interface GPUInfo {
   availableEncoders: string[];
 }
 
+interface GreenArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 interface VideoItem {
   path: string;
   name: string;
@@ -21,15 +28,14 @@ interface VideoItem {
 export default function App() {
   const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
   const [template, setTemplate] = useState<string | null>(null);
+  const [greenArea, setGreenArea] = useState<GreenArea | null>(null);
+  const [detectionError, setDetectionError] = useState<string | null>(null);
   const [outputFolder, setOutputFolder] = useState<string | null>(null);
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [useGPU, setUseGPU] = useState(true);
   const [useAiFraming, setUseAiFraming] = useState(true); // AI framing enabled by default
   const [quality, setQuality] = useState<'fast' | 'balanced' | 'quality'>('balanced');
-
-  // Green area (hardcoded for now - could be detected from template)
-  const greenArea = { x: 35, y: 709, width: 1008, height: 858 };
 
   useEffect(() => {
     // Detect GPU on mount
@@ -68,8 +74,20 @@ export default function App() {
   };
 
   const handleSelectTemplate = async () => {
-    const path = await window.electronAPI.selectTemplate();
-    if (path) setTemplate(path);
+    const result = await window.electronAPI.selectTemplate();
+    if (result) {
+      setTemplate(result.path);
+      
+      if (result.detection.success && result.detection.area) {
+        setGreenArea(result.detection.area);
+        setDetectionError(null);
+        console.log('[App] ✓ Green area detected:', result.detection.area);
+      } else {
+        setGreenArea(null);
+        setDetectionError(result.detection.error || 'Falha ao detectar área verde');
+        console.warn('[App] ✗ Green area detection failed:', result.detection.error);
+      }
+    }
   };
 
   const handleSelectOutput = async () => {
@@ -78,7 +96,7 @@ export default function App() {
   };
 
   const handleProcess = async () => {
-    if (!template || !outputFolder || videos.length === 0) return;
+    if (!template || !outputFolder || videos.length === 0 || !greenArea) return;
 
     setIsProcessing(true);
 
@@ -188,18 +206,31 @@ export default function App() {
       <div className="grid grid-cols-2 gap-6 mb-6">
         {/* Template */}
         <div
-          className="drop-zone cursor-pointer"
+          className={`drop-zone cursor-pointer ${detectionError ? 'border-destructive' : ''}`}
           onClick={handleSelectTemplate}
         >
           {template ? (
             <div>
-              <p className="text-primary font-medium">✓ Template selecionado</p>
-              <p className="text-sm text-muted-foreground truncate">{template.split(/[/\\]/).pop()}</p>
+              {greenArea ? (
+                <>
+                  <p className="text-primary font-medium">✓ Template detectado</p>
+                  <p className="text-sm text-muted-foreground truncate">{template.split(/[/\\]/).pop()}</p>
+                  <p className="text-xs text-primary/80 mt-1">
+                    Área verde: {greenArea.width}x{greenArea.height} em ({greenArea.x}, {greenArea.y})
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-destructive font-medium">⚠️ Área verde não detectada</p>
+                  <p className="text-sm text-muted-foreground truncate">{template.split(/[/\\]/).pop()}</p>
+                  <p className="text-xs text-destructive/80 mt-1">{detectionError}</p>
+                </>
+              )}
             </div>
           ) : (
             <div>
               <p className="text-lg mb-2">📁 Selecionar Template</p>
-              <p className="text-sm text-muted-foreground">PNG ou JPG com área verde</p>
+              <p className="text-sm text-muted-foreground">PNG ou JPG com área verde #00FF00</p>
             </div>
           )}
         </div>
@@ -299,11 +330,13 @@ export default function App() {
       {/* Process button */}
       <button
         onClick={handleProcess}
-        disabled={!template || !outputFolder || queuedCount === 0 || isProcessing}
+        disabled={!template || !greenArea || !outputFolder || queuedCount === 0 || isProcessing}
         className="w-full py-4 bg-primary text-primary-foreground font-bold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors text-lg"
       >
         {isProcessing
           ? 'Processando...'
+          : !greenArea && template
+          ? '⚠️ Template sem área verde detectada'
           : queuedCount > 0
           ? `🚀 Processar ${queuedCount} vídeo(s)`
           : 'Adicione vídeos para processar'}
