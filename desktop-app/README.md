@@ -7,21 +7,31 @@ Usa FFmpeg nativo com aceleração de GPU (NVIDIA NVENC, Intel QSV, AMD AMF).
 
 - **5-10x mais rápido** que a versão web
 - **Aceleração GPU**: Usa sua placa de vídeo para encoding
-- **Auto-update**: Atualizações automáticas quando disponíveis
 - **Processamento paralelo**: Múltiplos vídeos simultâneos
 - **Sem limite de tamanho**: Processa vídeos de qualquer duração
-- **AI Framing**: Enquadramento inteligente com detecção de rostos
+- **Suporte a todos os codecs**: H.264, H.265/HEVC, VP9, AV1, etc.
 
-## 📦 Instalação para Usuários
+## 📦 Instalação
 
-### Opção 1: Download do Instalador (Recomendado)
-1. Vá para [GitHub Releases](../../releases)
-2. Baixe o arquivo `VideoTemplatePro-Setup-X.X.X.exe`
-3. Execute o instalador
-4. Pronto! O app será atualizado automaticamente
+### Windows
+1. Baixe o instalador: `VideoTemplatePro-Setup.exe`
+2. Execute e siga as instruções
+3. O FFmpeg será instalado automaticamente
 
-### Opção 2: Build Manual
-Se preferir compilar você mesmo, siga as instruções em [BUILD.md](BUILD.md).
+### macOS
+1. Baixe: `VideoTemplatePro.dmg`
+2. Arraste para Applications
+3. Na primeira execução, clique com botão direito > Abrir
+
+### Linux
+```bash
+# Debian/Ubuntu
+sudo dpkg -i videotemplate-pro_1.0.0_amd64.deb
+
+# Ou use AppImage (sem instalação)
+chmod +x VideoTemplatePro.AppImage
+./VideoTemplatePro.AppImage
+```
 
 ## 🎮 Aceleração de GPU
 
@@ -34,73 +44,64 @@ O app detecta automaticamente sua placa de vídeo:
 | AMD (RX) | AMF | 5-10x tempo real |
 | CPU (fallback) | libx264 | 2-3x tempo real |
 
-## 🔄 Atualizações Automáticas
-
-O aplicativo verifica automaticamente por atualizações:
-- Ao iniciar o app
-- A cada 30 minutos enquanto aberto
-
-Quando uma nova versão estiver disponível, você verá uma notificação no canto inferior direito.
-
-## 🛠️ Para Desenvolvedores
+## 🛠️ Desenvolvimento
 
 ### Pré-requisitos
 - Node.js 18+
-- FFmpeg (será baixado automaticamente pelo script de build)
+- FFmpeg instalado no sistema
 
-### Setup de Desenvolvimento
+### Setup
 ```bash
 cd desktop-app
 npm install
 npm run dev
 ```
 
-### Build para Distribuição
+### Build
 ```bash
-# Windows (mais fácil)
-build.bat
+# Windows
+npm run build:win
 
-# Ou manualmente
-npm run build
-npx electron-builder --win
+# macOS
+npm run build:mac
+
+# Linux
+npm run build:linux
 ```
 
-### Estrutura do Projeto
+## 📁 Estrutura
+
 ```
 desktop-app/
 ├── src/
 │   ├── main/           # Processo principal (Electron)
 │   │   ├── index.ts    # Entry point
 │   │   ├── ffmpeg.ts   # FFmpeg wrapper com GPU
-│   │   ├── autoUpdater.ts  # Sistema de auto-update
-│   │   └── greenDetection.ts
+│   │   └── ipc.ts      # Comunicação com renderer
 │   ├── renderer/       # UI (React)
-│   │   ├── App.tsx
-│   │   └── components/
+│   │   └── ...
 │   └── preload/        # Bridge seguro
-├── ffmpeg-bin/         # Binários do FFmpeg (criado no build)
-├── build.bat           # Script de build automatizado
-├── electron-builder.yml # Configuração do builder
-└── package.json
+├── package.json
+└── electron-builder.yml
 ```
 
-## 📡 Configuração do Auto-Update
+## ⚙️ Configuração FFmpeg
 
-Para que o auto-update funcione, você precisa:
+O app usa estas flags para máxima performance:
 
-1. Editar `electron-builder.yml`:
-   ```yaml
-   publish:
-     provider: github
-     owner: SEU_USUARIO_GITHUB
-     repo: SEU_REPOSITORIO
-   ```
+```bash
+# NVIDIA NVENC (mais rápido)
+-c:v h264_nvenc -preset p4 -tune hq -rc vbr -cq 23
 
-2. Criar um Personal Access Token no GitHub com permissão `repo`
+# Intel QSV
+-c:v h264_qsv -preset faster -global_quality 23
 
-3. Usar o token no GitHub Actions (já configurado em `.github/workflows/build-desktop.yml`)
+# AMD AMF
+-c:v h264_amf -quality speed -rc cqp -qp 23
 
-4. Criar uma Release no GitHub com tag `v1.0.0` (por exemplo)
+# CPU (fallback)
+-c:v libx264 -preset veryfast -crf 23
+```
 
 ## 📄 Licença
 

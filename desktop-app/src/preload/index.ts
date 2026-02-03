@@ -20,16 +20,6 @@ export interface TemplateSelection {
   detection: DetectionResult;
 }
 
-export interface UpdateStatus {
-  status: string;
-  message: string;
-  version?: string;
-  percent?: number;
-  bytesPerSecond?: number;
-  transferred?: number;
-  total?: number;
-}
-
 export interface ElectronAPI {
   detectGPU: () => Promise<{
     hasNvidia: boolean;
@@ -63,13 +53,6 @@ export interface ElectronAPI {
     fps?: number;
     speed?: string;
   }) => void) => () => void;
-  
-  // Auto-update APIs
-  checkForUpdates: () => Promise<{ success: boolean; updateInfo?: unknown; error?: string }>;
-  downloadUpdate: () => Promise<{ success: boolean; error?: string }>;
-  installUpdate: () => void;
-  getAppVersion: () => Promise<string>;
-  onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void;
 }
 
 const electronAPI: ElectronAPI = {
@@ -85,21 +68,6 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on('video-progress', handler);
     return () => {
       ipcRenderer.removeListener('video-progress', handler);
-    };
-  },
-  
-  // Auto-update APIs
-  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
-  downloadUpdate: () => ipcRenderer.invoke('download-update'),
-  installUpdate: () => ipcRenderer.invoke('install-update'),
-  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
-  onUpdateStatus: (callback) => {
-    const handler = (_event: Electron.IpcRendererEvent, status: UpdateStatus) => {
-      callback(status);
-    };
-    ipcRenderer.on('update-status', handler);
-    return () => {
-      ipcRenderer.removeListener('update-status', handler);
     };
   },
 };

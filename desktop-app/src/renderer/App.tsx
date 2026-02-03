@@ -1,6 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { Tutorial } from './components/Tutorial';
-import { UpdateNotification } from './components/UpdateNotification';
 
 interface GPUInfo {
   hasNvidia: boolean;
@@ -36,9 +34,8 @@ export default function App() {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [useGPU, setUseGPU] = useState(true);
-  const [useAiFraming, setUseAiFraming] = useState(true);
+  const [useAiFraming, setUseAiFraming] = useState(true); // AI framing enabled by default
   const [quality, setQuality] = useState<'fast' | 'balanced' | 'quality'>('balanced');
-  const [showTutorial, setShowTutorial] = useState(false);
 
   useEffect(() => {
     // Detect GPU on mount
@@ -168,24 +165,10 @@ export default function App() {
 
   return (
     <div className="min-h-screen p-6">
-      {/* Auto-update notification */}
-      <UpdateNotification />
-
-      {/* Tutorial Modal */}
-      {showTutorial && <Tutorial onClose={() => setShowTutorial(false)} />}
-
       {/* Header */}
-      <header className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-primary">VideoTemplate Pro</h1>
-          <p className="text-muted-foreground">Processamento ultra-rápido com GPU</p>
-        </div>
-        <button
-          onClick={() => setShowTutorial(true)}
-          className="px-4 py-2 bg-primary/10 hover:bg-primary/20 text-primary font-medium rounded-lg transition-colors flex items-center gap-2"
-        >
-          📚 Tutorial
-        </button>
+      <header className="mb-8">
+        <h1 className="text-3xl font-bold text-primary">VideoTemplate Pro</h1>
+        <p className="text-muted-foreground">Processamento ultra-rápido com GPU</p>
       </header>
 
       {/* GPU Info */}
