@@ -4,7 +4,12 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [
+      externalizeDepsPlugin({
+        // Don't externalize electron-updater - it needs to be bundled
+        exclude: ['electron-updater']
+      })
+    ],
     build: {
       outDir: 'dist/main',
       rollupOptions: {
