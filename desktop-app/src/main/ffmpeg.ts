@@ -581,15 +581,16 @@ export function processVideo(
       ].filter(Boolean).join(',');
 
       const filterComplex = [
-        // Step 1: Process video (remove borders → scale → crop → format)
+        // Step 1: Process video (remove borders → scale → crop → sharpen → format)
         `[0:v]${videoPipeline}[vid]`,
-        // Template with chroma key - use tighter tolerance for cleaner edges
-        `[1:v]scale=${outW}:${outH},format=rgb24,chromakey=0x00FF00:0.25:0.08[mask]`,
-        // Infinite black background
+        // Template with HIGH QUALITY Lanczos scaling + chroma key
+        // flags=lanczos ensures the template PNG stays crisp and sharp
+        `[1:v]scale=${outW}:${outH}:flags=lanczos,format=rgba,chromakey=0x00FF00:0.25:0.08[mask]`,
+        // Infinite black background at full resolution
         `color=black:s=${outW}x${outH}[bg]`,
         // Overlay video in green area (slightly oversized to cover completely with margin overlap)
         `[bg][vid]overlay=${x}:${y}:shortest=1[base]`,
-        // Overlay template on top
+        // Overlay template on top, then convert to yuv420p with high quality chroma subsampling
         `[base][mask]overlay=0:0:shortest=1,format=yuv420p[out]`,
       ].join(';');
 
