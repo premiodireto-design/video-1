@@ -208,14 +208,16 @@ export function detectGPU(): GPUInfo {
 }
 
 /**
- * Get encoder-specific flags for best performance
+ * Get encoder-specific flags for best performance and quality
+ * Optimized for Full HD (1080x1920) output with high visual fidelity
  */
 function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'quality'): string[] {
   // Optimized presets for speed + quality + smooth playback
+  // Lower CRF = higher quality (18 is visually lossless, 15 is even better)
   const qualityMap = {
-    fast: { nvenc: 'p4', qsv: 'veryfast', amf: 'speed', x264: 'veryfast', crf: 26 },
-    balanced: { nvenc: 'p5', qsv: 'faster', amf: 'balanced', x264: 'faster', crf: 22 },
-    quality: { nvenc: 'p6', qsv: 'slower', amf: 'quality', x264: 'medium', crf: 18 },
+    fast: { nvenc: 'p4', qsv: 'veryfast', amf: 'speed', x264: 'veryfast', crf: 23, bitrate: '8M', maxrate: '12M' },
+    balanced: { nvenc: 'p5', qsv: 'faster', amf: 'balanced', x264: 'faster', crf: 18, bitrate: '12M', maxrate: '18M' },
+    quality: { nvenc: 'p7', qsv: 'slower', amf: 'quality', x264: 'slow', crf: 15, bitrate: '18M', maxrate: '25M' },
   };
   
   const q = qualityMap[quality];
@@ -225,19 +227,27 @@ function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'qualit
     '-vsync', 'cfr',        // Constant frame rate - prevents stutters
     '-g', '30',             // GOP size = 1 second at 30fps
     '-bf', '0',             // No B-frames for smoother playback
+    '-pix_fmt', 'yuv420p',  // Ensure maximum compatibility
   ];
 
   switch (encoder) {
     case 'h264_nvenc':
       // Optimized NVENC flags with new preset naming (p1-p7)
+      // p7 is highest quality for NVENC
       return [
         '-c:v', 'h264_nvenc',
         '-preset', q.nvenc,
         '-rc', 'vbr',           // Variable bitrate for better quality
         '-cq', String(q.crf),
-        '-b:v', '0',            // Let CQ control quality
+        '-b:v', q.bitrate,      // Target bitrate for high quality
+        '-maxrate', q.maxrate,  // Maximum bitrate cap
+        '-bufsize', q.maxrate,  // Buffer size = maxrate for smooth VBR
         '-spatial-aq', '1',     // Spatial adaptive quantization
         '-temporal-aq', '1',    // Temporal adaptive quantization
+        '-aq-strength', '8',    // Higher AQ strength for better detail
+        '-rc-lookahead', '32',  // Lookahead for better rate control
+        '-profile:v', 'high',   // High profile for better compression
+        '-level', '5.1',        // Support for Full HD at high bitrates
         ...smoothFlags,
       ];
     
@@ -246,6 +256,11 @@ function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'qualit
         '-c:v', 'h264_qsv',
         '-preset', q.qsv,
         '-global_quality', String(q.crf),
+        '-b:v', q.bitrate,
+        '-maxrate', q.maxrate,
+        '-bufsize', q.maxrate,
+        '-look_ahead', '1',     // Enable lookahead for better quality
+        '-profile:v', 'high',
         ...smoothFlags,
       ];
     
@@ -253,9 +268,11 @@ function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'qualit
       return [
         '-c:v', 'h264_amf',
         '-quality', q.amf,
-        '-rc', 'cqp',
-        '-qp_i', String(q.crf),
-        '-qp_p', String(q.crf),
+        '-rc', 'vbr_latency',   // VBR for better quality
+        '-b:v', q.bitrate,
+        '-maxrate', q.maxrate,
+        '-bufsize', q.maxrate,
+        '-profile:v', 'high',
         ...smoothFlags,
       ];
     
@@ -265,7 +282,9 @@ function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'qualit
         '-preset', q.x264,
         '-crf', String(q.crf),
         '-tune', 'film',        // Better for real content vs fastdecode
-        '-x264-params', 'ref=3:bframes=0',  // Optimized for smooth playback
+        '-profile:v', 'high',   // High profile for better compression
+        '-level', '5.1',
+        '-x264-params', `ref=4:bframes=0:aq-mode=3:psy-rd=1.0:deblock=-1,-1`,  // Enhanced quality params
         '-threads', '0',
         ...smoothFlags,
       ];
@@ -524,7 +543,12 @@ export function processVideo(
       // Keep everything EVEN to satisfy encoders.
       const safeWidth = makeEven(expandedWidth + 4);
       const safeHeight = makeEven(expandedHeight + 4);
-      const scaleExpr = `scale=${safeWidth}:${safeHeight}:force_original_aspect_ratio=increase`;
+      
+      // HIGH QUALITY SCALING: Use Lanczos algorithm for best interpolation
+      // - flags=lanczos: Best quality for both upscaling and downscaling
+      // - param0=3: Lanczos filter size (3 is a good balance between quality and speed)
+      // This prevents the "blurry/barred" look that bilinear/bicubic can produce
+      const scaleExpr = `scale=${safeWidth}:${safeHeight}:force_original_aspect_ratio=increase:flags=lanczos`;
 
       // Calculate crop position based on AI anchor points
       // anchorX: 0=left, 0.5=center, 1=right
@@ -543,13 +567,15 @@ export function processVideo(
 
       // Build the video filter chain:
       // 1. If borders detected: crop them out first
-      // 2. Scale to cover target area (with over-scale for safety)
+      // 2. Scale to cover target area with HIGH QUALITY Lanczos interpolation
       // 3. Crop to exact size using AI anchors
-      // 4. Convert to RGB for template compatibility
+      // 4. Apply subtle unsharp mask to recover detail lost in scaling
+      // 5. Convert to RGB for template compatibility
       const videoPipeline = [
         borderCropFilter, // null if no borders (will be filtered out)
         scaleExpr,
         `crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr}`,
+        'unsharp=3:3:0.3:3:3:0.1', // Subtle sharpening: luma 3x3 @ 0.3, chroma 3x3 @ 0.1
         'setsar=1',
         'format=rgb24',
       ].filter(Boolean).join(',');
