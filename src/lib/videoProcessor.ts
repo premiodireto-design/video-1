@@ -82,7 +82,7 @@ export async function processVideo(
   video.preload = 'auto';
   video.playsInline = true;
   video.crossOrigin = 'anonymous';
-  video.playbackRate = 1;
+  video.playbackRate = 1.01; // Acelerar 1%
   video.muted = false; // Must be false for AudioContext capture to work
   video.volume = 0.001; // Near-silent but not muted (allows audio capture)
   
@@ -161,9 +161,10 @@ export async function processVideo(
   });
 
   const duration = video.duration;
-  const trimStart = 0.5; // Cortar 0.5s do início
-  const trimEnd = 0.5; // Cortar 0.5s do final
-  const effectiveDuration = Math.max(0.5, duration - trimStart - trimEnd);
+  const trimStart = 0.2; // Cortar 0.2s do início
+  const trimEnd = 0.2; // Cortar 0.2s do final
+  const speedFactor = 1.01; // Acelerar vídeo em 1%
+  const effectiveDuration = Math.max(0.5, (duration - trimStart - trimEnd) / speedFactor);
 
   // Agora que sabemos a duração, ajustamos o timeout:
   // - mínimo 5min
