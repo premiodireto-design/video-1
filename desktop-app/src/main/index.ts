@@ -110,6 +110,8 @@ ipcMain.handle('process-video', async (event, options: {
     trimStart: number;
     trimEnd: number;
     useAiFraming?: boolean;
+    useTeste?: boolean;
+    useMirror?: boolean;
   };
 }) => {
   return processVideo(options, (progress) => {

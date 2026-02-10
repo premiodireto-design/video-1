@@ -36,6 +36,8 @@ export default function App() {
   const [useGPU, setUseGPU] = useState(true);
   const [useAiFraming, setUseAiFraming] = useState(true); // AI framing enabled by default
   const [quality, setQuality] = useState<'fast' | 'balanced' | 'quality'>('balanced');
+  const [useTeste, setUseTeste] = useState(false);
+  const [useMirror, setUseMirror] = useState(false);
 
   useEffect(() => {
     // Detect GPU on mount
@@ -100,10 +102,11 @@ export default function App() {
 
     setIsProcessing(true);
 
+    let sequenceIndex = 1;
     for (const video of videos) {
       if (video.status !== 'queued') continue;
 
-      const outputPath = `${outputFolder}/${video.name.replace(/\.[^/.]+$/, '')}_processed.mp4`;
+      const outputPath = `${outputFolder}/${sequenceIndex}_processed.mp4`;
 
       setVideos((prev) =>
         prev.map((v) =>
@@ -123,12 +126,15 @@ export default function App() {
             quality,
             trimStart: 0.5,
             trimEnd: 0.5,
-            useAiFraming, // Pass AI framing setting
+            useAiFraming,
+            useTeste,
+            useMirror,
           },
         });
       } catch (error) {
         console.error('Processing error:', error);
       }
+      sequenceIndex++;
     }
 
     setIsProcessing(false);
@@ -198,6 +204,26 @@ export default function App() {
               className="w-4 h-4"
             />
             <span className="text-sm">🧠 IA Framing</span>
+          </label>
+        </div>
+        <div className="flex items-center gap-4 mt-3">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={useTeste}
+              onChange={(e) => setUseTeste(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm">🧪 TESTE (denoise + filtros + cortar 1s final)</span>
+          </label>
+          <label className="flex items-center gap-2 ml-4">
+            <input
+              type="checkbox"
+              checked={useMirror}
+              onChange={(e) => setUseMirror(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm">🪞 Espelho (inverter horizontal)</span>
           </label>
         </div>
       </div>
