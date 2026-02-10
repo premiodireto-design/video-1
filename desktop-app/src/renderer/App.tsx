@@ -106,7 +106,7 @@ export default function App() {
     for (const video of videos) {
       if (video.status !== 'queued') continue;
 
-      const outputPath = `${outputFolder}/${sequenceIndex}_processed.mp4`;
+      const outputPath = `${outputFolder}/(${sequenceIndex}).mp4`;
 
       setVideos((prev) =>
         prev.map((v) =>
