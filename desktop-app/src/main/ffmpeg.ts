@@ -382,7 +382,9 @@ export function processVideo(
       quality: 'fast' | 'balanced' | 'quality';
       trimStart: number;
       trimEnd: number;
-      useAiFraming?: boolean; // NEW: Use AI to detect faces and position video
+      useAiFraming?: boolean;
+      useTeste?: boolean;
+      useMirror?: boolean;
     };
   },
   onProgress: (progress: ProcessingProgress) => void
@@ -571,14 +573,28 @@ export function processVideo(
       // 3. Crop to exact size using AI anchors
       // 4. Apply subtle unsharp mask to recover detail lost in scaling
       // 5. Convert to RGB for template compatibility
-      const videoPipeline = [
+      // Build video filter pipeline with optional TESTE and Mirror filters
+      const videoPipelineSteps: (string | null)[] = [
         borderCropFilter, // null if no borders (will be filtered out)
         scaleExpr,
         `crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr}`,
-        'unsharp=3:3:0.3:3:3:0.1', // Subtle sharpening: luma 3x3 @ 0.3, chroma 3x3 @ 0.1
-        'setsar=1',
-        'format=rgb24',
-      ].filter(Boolean).join(',');
+        'unsharp=3:3:0.3:3:3:0.1', // Subtle sharpening
+      ];
+
+      // TESTE mode: add denoise + subtle color/contrast filters
+      if (settings.useTeste) {
+        videoPipelineSteps.push('hqdn3d=4:3:6:4'); // Denoise: luma/chroma spatial/temporal
+        videoPipelineSteps.push('eq=contrast=1.02:brightness=0.01:saturation=1.03'); // Subtle enhancement
+        videoPipelineSteps.push('curves=preset=lighter'); // Very subtle brightness curve
+      }
+
+      // Mirror mode: horizontal flip
+      if (settings.useMirror) {
+        videoPipelineSteps.push('hflip');
+      }
+
+      videoPipelineSteps.push('setsar=1', 'format=rgb24');
+      const videoPipeline = videoPipelineSteps.filter(Boolean).join(',');
 
       const filterComplex = [
         // Step 1: Process video (remove borders → scale → crop → sharpen → format)
@@ -609,6 +625,23 @@ export function processVideo(
 
     console.log('[FFmpeg] Encoders to try (in order):', encodersToTry);
 
+    // Get video duration for TESTE mode end-trim
+    let videoDuration = 0;
+    if (settings.useTeste) {
+      try {
+        const dims = await getVideoDimensions(videoPath);
+        // Also get duration via ffprobe
+        const ffprobePath = ffmpegPath.replace(/ffmpeg(\.exe)?$/, 'ffprobe$1');
+        const durResult = spawnSync(ffprobePath, [
+          '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', videoPath
+        ], { encoding: 'utf8', timeout: 10000 });
+        videoDuration = parseFloat(durResult.stdout?.trim() || '0') || 0;
+        console.log('[FFmpeg] Video duration for TESTE trim:', videoDuration);
+      } catch (e) {
+        console.warn('[FFmpeg] Could not get duration for TESTE trim:', e);
+      }
+    }
+
     const runWithEncoder = (encoder: string) => {
       const encoderFlags = getEncoderFlags(encoder, settings.quality);
       const isGpuEncoder = encoder !== 'libx264';
@@ -619,7 +652,12 @@ export function processVideo(
         'libx264': 'CPU',
       }[encoder] || encoder;
 
-      // Build FFmpeg command
+      // TESTE mode: trim 1 second from end
+      const testeEndTrim = settings.useTeste ? 1 : 0;
+      const effectiveEnd = (videoDuration > 0 && testeEndTrim > 0)
+        ? videoDuration - settings.trimStart - testeEndTrim
+        : 0;
+
       const args = [
         '-y', // Overwrite output
         '-i', videoPath,
@@ -627,6 +665,7 @@ export function processVideo(
         '-loop', '1',
         '-i', templatePath,
         '-ss', String(settings.trimStart),
+        ...(effectiveEnd > 0 ? ['-t', String(effectiveEnd)] : []),
         '-filter_complex', filterComplex,
         '-map', '[out]',
         '-map', '0:a?', // Map audio if exists
