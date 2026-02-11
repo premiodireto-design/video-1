@@ -212,43 +212,43 @@ export function detectGPU(): GPUInfo {
  * Optimized for Full HD (1080x1920) output with high visual fidelity
  */
 function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'quality'): string[] {
-  // Optimized presets for speed + quality + smooth playback
-  // Lower CRF = higher quality (18 is visually lossless, 15 is even better)
+  // Instagram Reels optimized settings
+  // All presets now use high bitrate minimums (>=10M) for maximum quality after IG compression
   const qualityMap = {
-    fast: { nvenc: 'p4', qsv: 'veryfast', amf: 'speed', x264: 'veryfast', crf: 23, bitrate: '8M', maxrate: '12M' },
-    balanced: { nvenc: 'p5', qsv: 'faster', amf: 'balanced', x264: 'faster', crf: 18, bitrate: '12M', maxrate: '18M' },
-    quality: { nvenc: 'p7', qsv: 'slower', amf: 'quality', x264: 'slow', crf: 15, bitrate: '18M', maxrate: '25M' },
+    fast:     { nvenc: 'p5', qsv: 'faster', amf: 'balanced', x264: 'medium', crf: 19, bitrate: '10M', maxrate: '13M', bufsize: '26M' },
+    balanced: { nvenc: 'p6', qsv: 'slow',   amf: 'quality',  x264: 'slow',   crf: 17, bitrate: '12M', maxrate: '15M', bufsize: '30M' },
+    quality:  { nvenc: 'p7', qsv: 'slower',  amf: 'quality',  x264: 'slow',   crf: 17, bitrate: '12M', maxrate: '15M', bufsize: '30M' },
   };
   
   const q = qualityMap[quality];
 
-  // Common flags for smooth playback (constant frame rate, proper GOP)
-  const smoothFlags = [
-    '-vsync', 'cfr',        // Constant frame rate - prevents stutters
-    '-g', '30',             // GOP size = 1 second at 30fps
-    '-bf', '0',             // No B-frames for smoother playback
-    '-pix_fmt', 'yuv420p',  // Ensure maximum compatibility
+  // Instagram Reels optimized common flags
+  const reelsFlags = [
+    '-r', '30',                // Force 30fps output
+    '-vsync', 'cfr',           // Constant frame rate
+    '-g', '60',                // Keyframe every 60 frames (2s at 30fps)
+    '-keyint_min', '60',       // Minimum keyframe interval
+    '-sc_threshold', '0',      // Disable scene change detection for consistent GOP
+    '-pix_fmt', 'yuv420p',     // Maximum compatibility
   ];
 
   switch (encoder) {
     case 'h264_nvenc':
-      // Optimized NVENC flags with new preset naming (p1-p7)
-      // p7 is highest quality for NVENC
       return [
         '-c:v', 'h264_nvenc',
         '-preset', q.nvenc,
-        '-rc', 'vbr',           // Variable bitrate for better quality
+        '-rc', 'vbr',
         '-cq', String(q.crf),
-        '-b:v', q.bitrate,      // Target bitrate for high quality
-        '-maxrate', q.maxrate,  // Maximum bitrate cap
-        '-bufsize', q.maxrate,  // Buffer size = maxrate for smooth VBR
-        '-spatial-aq', '1',     // Spatial adaptive quantization
-        '-temporal-aq', '1',    // Temporal adaptive quantization
-        '-aq-strength', '8',    // Higher AQ strength for better detail
-        '-rc-lookahead', '32',  // Lookahead for better rate control
-        '-profile:v', 'high',   // High profile for better compression
-        '-level', '5.1',        // Support for Full HD at high bitrates
-        ...smoothFlags,
+        '-b:v', q.bitrate,
+        '-maxrate', q.maxrate,
+        '-bufsize', q.bufsize,
+        '-spatial-aq', '1',
+        '-temporal-aq', '1',
+        '-aq-strength', '8',
+        '-rc-lookahead', '32',
+        '-profile:v', 'high',
+        '-level', '4.1',
+        ...reelsFlags,
       ];
     
     case 'h264_qsv':
@@ -258,35 +258,39 @@ function getEncoderFlags(encoder: string, quality: 'fast' | 'balanced' | 'qualit
         '-global_quality', String(q.crf),
         '-b:v', q.bitrate,
         '-maxrate', q.maxrate,
-        '-bufsize', q.maxrate,
-        '-look_ahead', '1',     // Enable lookahead for better quality
+        '-bufsize', q.bufsize,
+        '-look_ahead', '1',
         '-profile:v', 'high',
-        ...smoothFlags,
+        '-level', '4.1',
+        ...reelsFlags,
       ];
     
     case 'h264_amf':
       return [
         '-c:v', 'h264_amf',
         '-quality', q.amf,
-        '-rc', 'vbr_latency',   // VBR for better quality
+        '-rc', 'vbr_latency',
         '-b:v', q.bitrate,
         '-maxrate', q.maxrate,
-        '-bufsize', q.maxrate,
+        '-bufsize', q.bufsize,
         '-profile:v', 'high',
-        ...smoothFlags,
+        '-level', '4.1',
+        ...reelsFlags,
       ];
     
-    default: // libx264
+    default: // libx264 - Instagram Reels optimized
       return [
         '-c:v', 'libx264',
         '-preset', q.x264,
         '-crf', String(q.crf),
-        '-tune', 'film',        // Better for real content vs fastdecode
-        '-profile:v', 'high',   // High profile for better compression
-        '-level', '5.1',
-        '-x264-params', `ref=4:bframes=0:aq-mode=3:psy-rd=1.0:deblock=-1,-1`,  // Enhanced quality params
+        '-profile:v', 'high',
+        '-level', '4.1',
+        '-b:v', q.bitrate,
+        '-maxrate', q.maxrate,
+        '-bufsize', q.bufsize,
+        '-x264-params', 'ref=4:bframes=2:aq-mode=3:psy-rd=1.0:deblock=-1,-1',
         '-threads', '0',
-        ...smoothFlags,
+        ...reelsFlags,
       ];
   }
 }
@@ -672,6 +676,7 @@ export function processVideo(
         ...encoderFlags,
         '-c:a', 'aac',
         '-b:a', '192k',
+        '-ar', '48000',
         '-movflags', '+faststart',
         '-progress', 'pipe:1', // Output progress to stdout
         outputPath,
