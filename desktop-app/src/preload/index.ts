@@ -43,6 +43,9 @@ export interface ElectronAPI {
       trimStart: number;
       trimEnd: number;
       useAiFraming?: boolean;
+      useTeste?: boolean;
+      useMirror?: boolean;
+      useSubtitleMode?: boolean;
     };
   }) => Promise<{ success: boolean; outputPath?: string; error?: string }>;
   onVideoProgress: (callback: (progress: {

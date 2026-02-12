@@ -38,6 +38,7 @@ export default function App() {
   const [quality, setQuality] = useState<'fast' | 'balanced' | 'quality'>('balanced');
   const [useTeste, setUseTeste] = useState(false);
   const [useMirror, setUseMirror] = useState(false);
+  const [useSubtitleMode, setUseSubtitleMode] = useState(false);
 
   useEffect(() => {
     // Detect GPU on mount
@@ -129,6 +130,7 @@ export default function App() {
             useAiFraming,
             useTeste,
             useMirror,
+            useSubtitleMode,
           },
         });
       } catch (error) {
@@ -224,6 +226,15 @@ export default function App() {
               className="w-4 h-4"
             />
             <span className="text-sm">🪞 Espelho (inverter horizontal)</span>
+          </label>
+          <label className="flex items-center gap-2 ml-4">
+            <input
+              type="checkbox"
+              checked={useSubtitleMode}
+              onChange={(e) => setUseSubtitleMode(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm">📝 Vídeo com Legenda</span>
           </label>
         </div>
       </div>

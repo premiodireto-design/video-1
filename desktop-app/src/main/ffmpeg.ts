@@ -389,6 +389,7 @@ export function processVideo(
       useAiFraming?: boolean;
       useTeste?: boolean;
       useMirror?: boolean;
+      useSubtitleMode?: boolean;
     };
   },
   onProgress: (progress: ProcessingProgress) => void
@@ -537,53 +538,47 @@ export function processVideo(
       const expandedWidth = makeEven(width + (margin * 2));
       const expandedHeight = makeEven(height + (margin * 2));
 
-      // TRUE "cover" mode (cross-machine reliable):
-      // Some FFmpeg builds/hardware paths can round the computed dimension DOWN by 1-2px when
-      // using expression-based scale. That underflow reveals the black background as a "barra preta".
-      //
-      // More robust strategy:
-      // 1) scale to a size SLIGHTLY bigger than we need (safeW/safeH)
-      //    using force_original_aspect_ratio=increase (guarantees cover)
-      // 2) crop back to the exact expanded size using the AI anchors
-      //
-      // Keep everything EVEN to satisfy encoders.
-      const safeWidth = makeEven(expandedWidth + 4);
-      const safeHeight = makeEven(expandedHeight + 4);
-      
-      // HIGH QUALITY SCALING: Use Lanczos algorithm for best interpolation
-      // - flags=lanczos: Best quality for both upscaling and downscaling
-      // - param0=3: Lanczos filter size (3 is a good balance between quality and speed)
-      // This prevents the "blurry/barred" look that bilinear/bicubic can produce
-      const scaleExpr = `scale=${safeWidth}:${safeHeight}:force_original_aspect_ratio=increase:flags=lanczos`;
+      // Subtitle mode uses CONTAIN (fit entire video, no cropping) instead of COVER (crop to fill)
+      const isSubtitleMode = !!settings.useSubtitleMode;
 
-      // Calculate crop position based on AI anchor points
-      // anchorX: 0=left, 0.5=center, 1=right
-      // anchorY: 0=top, 0.5=center, 1=bottom
-      // For FFmpeg crop: crop=w:h:x:y where x and y are the top-left corner of the crop area
-      // When anchorY=0 (top), we want y=0 (keep top)
-      // When anchorY=1 (bottom), we want y=(ih-height) (keep bottom)
-      // cropX = (scaled_width - target_width) * anchorX
-      // cropY = (scaled_height - target_height) * anchorY
-      
-      // FFmpeg crop filter: iw/ih refer to input dimensions (after scale)
-      // We need to calculate how much to offset based on the anchor
-      // Use floor() to avoid subpixel rounding differences between FFmpeg builds/hardware paths.
-      const cropXExpr = `floor((iw-${expandedWidth})*${aiOffsetX})`;
-      const cropYExpr = `floor((ih-${expandedHeight})*${aiOffsetY})`;
+      let scaleExpr: string;
+      let cropExpr: string | null;
 
-      // Build the video filter chain:
-      // 1. If borders detected: crop them out first
-      // 2. Scale to cover target area with HIGH QUALITY Lanczos interpolation
-      // 3. Crop to exact size using AI anchors
-      // 4. Apply subtle unsharp mask to recover detail lost in scaling
-      // 5. Convert to RGB for template compatibility
-      // Build video filter pipeline with optional TESTE and Mirror filters
+      if (isSubtitleMode) {
+        // CONTAIN mode: scale to fit entirely within the area, pad with black if needed
+        // This ensures subtitles at the bottom are never cropped
+        scaleExpr = `scale=${expandedWidth}:${expandedHeight}:force_original_aspect_ratio=decrease:flags=lanczos`;
+        // Pad to exact size, centering the video (black bars fill the rest)
+        cropExpr = null; // No crop needed
+        console.log('[FFmpeg] Subtitle mode: using CONTAIN (fit) instead of COVER');
+      } else {
+        // TRUE "cover" mode (cross-machine reliable):
+        // 1) scale to a size SLIGHTLY bigger than we need (safeW/safeH)
+        //    using force_original_aspect_ratio=increase (guarantees cover)
+        // 2) crop back to the exact expanded size using the AI anchors
+        const safeWidth = makeEven(expandedWidth + 4);
+        const safeHeight = makeEven(expandedHeight + 4);
+        
+        scaleExpr = `scale=${safeWidth}:${safeHeight}:force_original_aspect_ratio=increase:flags=lanczos`;
+        
+        const cropXExpr = `floor((iw-${expandedWidth})*${aiOffsetX})`;
+        const cropYExpr = `floor((ih-${expandedHeight})*${aiOffsetY})`;
+        cropExpr = `crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr}`;
+      }
+
+      // Build video filter pipeline
       const videoPipelineSteps: (string | null)[] = [
         borderCropFilter, // null if no borders (will be filtered out)
         scaleExpr,
-        `crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr}`,
-        'unsharp=3:3:0.3:3:3:0.1', // Subtle sharpening
+        cropExpr, // null in subtitle mode (no crop)
       ];
+
+      // In subtitle mode, pad to exact size centering the content
+      if (isSubtitleMode) {
+        videoPipelineSteps.push(`pad=${expandedWidth}:${expandedHeight}:(ow-iw)/2:(oh-ih)/2:black`);
+      }
+
+      videoPipelineSteps.push('unsharp=3:3:0.3:3:3:0.1'); // Subtle sharpening
 
       // TESTE mode: add denoise + subtle color/contrast filters
       if (settings.useTeste) {
