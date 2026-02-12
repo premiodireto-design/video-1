@@ -450,8 +450,9 @@ export function processVideo(
           // In subtitle/text mode, expand the detected content area with extra vertical margin
           // so text at top/bottom doesn't get cut flush
           if (isSubtitleMode) {
-            const extraMarginY = Math.max(12, Math.round(borderInfo.originalHeight * 0.03)); // at least 12px or 3% of height
-            const extraMarginX = Math.max(6, Math.round(borderInfo.originalWidth * 0.01)); // small horizontal margin too
+            // Generous margins to NEVER cut text/captions at top or bottom
+            const extraMarginY = Math.max(24, Math.round(borderInfo.originalHeight * 0.06)); // at least 24px or 6% of height
+            const extraMarginX = Math.max(8, Math.round(borderInfo.originalWidth * 0.02)); // horizontal margin
 
             // Expand crop area: move Y up & increase height, clamp to original bounds
             borderInfo.y = Math.max(0, borderInfo.y - extraMarginY);
@@ -463,7 +464,7 @@ export function processVideo(
             borderInfo.width = borderInfo.width % 2 === 0 ? borderInfo.width : borderInfo.width - 1;
             borderInfo.height = borderInfo.height % 2 === 0 ? borderInfo.height : borderInfo.height - 1;
 
-            console.log(`[FFmpeg] Subtitle mode: expanded crop area by ${extraMarginY}px top/bottom for text breathing room`);
+            console.log(`[FFmpeg] Subtitle mode: expanded crop area by ${extraMarginY}px top/bottom for text safety`);
           }
 
           borderCropFilter = generateCropFilter(borderInfo);
