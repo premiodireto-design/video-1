@@ -46,6 +46,8 @@ export interface ElectronAPI {
       useTeste?: boolean;
       useMirror?: boolean;
       useSubtitleMode?: boolean;
+      subtitleTop?: number;
+      subtitleBottom?: number;
     };
   }) => Promise<{ success: boolean; outputPath?: string; error?: string }>;
   onVideoProgress: (callback: (progress: {

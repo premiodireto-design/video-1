@@ -390,6 +390,8 @@ export function processVideo(
       useTeste?: boolean;
       useMirror?: boolean;
       useSubtitleMode?: boolean;
+      subtitleTop?: number;
+      subtitleBottom?: number;
     };
   },
   onProgress: (progress: ProcessingProgress) => void
@@ -423,20 +425,193 @@ export function processVideo(
 
     // Run the async processing logic
     (async () => {
+      const isSubtitleMode = !!settings.useSubtitleMode;
+
+      // ===== SUBTITLE MODE: completely separate pipeline (scale + pad, NO crop, NO template) =====
+      if (isSubtitleMode) {
+        const TOP = settings.subtitleTop ?? 520;
+        const BOTTOM = settings.subtitleBottom ?? 80;
+        const BOXH = 1920 - TOP - BOTTOM;
+        const CANVAS_W = 1080;
+        const CANVAS_H = 1920;
+
+        console.log(`[FFmpeg] Subtitle mode: TOP=${TOP}, BOTTOM=${BOTTOM}, BOXH=${BOXH}`);
+
+        onProgress({
+          videoPath,
+          progress: 5,
+          stage: 'processing',
+          message: 'Preparando vídeo (modo legenda)...',
+        });
+
+        // Get video duration for trim
+        let videoDuration = 0;
+        try {
+          const ffprobePath = ffmpegPath.replace(/ffmpeg(\.exe)?$/, 'ffprobe$1');
+          const durResult = spawnSync(ffprobePath, [
+            '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', videoPath
+          ], { encoding: 'utf8', timeout: 10000 });
+          videoDuration = parseFloat(durResult.stdout?.trim() || '0') || 0;
+          console.log('[FFmpeg] Video duration:', videoDuration);
+        } catch (e) {
+          console.warn('[FFmpeg] Could not get duration:', e);
+        }
+
+        // Trim 0.3s start + 0.3s end
+        const trimStart = settings.trimStart || 0.3;
+        const effectiveDuration = videoDuration > 0 ? videoDuration - trimStart - (settings.trimEnd || 0.3) : 0;
+
+        // Build filter:
+        // 1. Scale to fit within CANVAS_W x BOXH keeping aspect ratio
+        // 2. Speed up to 1.2x (setpts + atempo)
+        // 3. Pad to full canvas with black, position at Y=TOP
+        // 4. Mirror if enabled
+        // 5. Subtle brightness oscillation
+        const scaleExpr = `scale=w='if(gt(a,${CANVAS_W}/${BOXH}),${CANVAS_W},trunc(${BOXH}*a/2)*2)':h='if(gt(a,${CANVAS_W}/${BOXH}),trunc(${CANVAS_W}/a/2)*2,${BOXH})':flags=lanczos`;
+        const padExpr = `pad=${CANVAS_W}:${CANVAS_H}:(ow-iw)/2:${TOP}:color=black`;
+
+        const filterSteps: string[] = [
+          scaleExpr,
+          padExpr,
+        ];
+
+        // Mirror
+        if (settings.useMirror) {
+          filterSteps.push('hflip');
+        }
+
+        // Speed 1.2x
+        filterSteps.push("setpts=PTS/1.2");
+
+        // Subtle brightness animation (imperceptible to eye, detectable by algorithm)
+        filterSteps.push("eq=brightness='0.008*sin(2*PI*t/5)':contrast='1.0+0.015*sin(2*PI*t/7)'");
+
+        filterSteps.push('format=yuv420p');
+
+        const videoFilter = filterSteps.join(',');
+
+        // Audio: speed 1.2x with atempo
+        const audioFilter = 'atempo=1.2';
+
+        // Build encoder list
+        const encodersToTry: string[] = [];
+        if (settings.useGPU) {
+          const gpuInfo = detectGPU();
+          if (gpuInfo.hasNvidia) encodersToTry.push('h264_nvenc');
+          if (gpuInfo.hasIntelQSV) encodersToTry.push('h264_qsv');
+          if (gpuInfo.hasAMD) encodersToTry.push('h264_amf');
+        }
+        encodersToTry.push('libx264');
+
+        const runSubtitleEncode = (encoder: string) => {
+          const encoderFlags = getEncoderFlags(encoder, settings.quality);
+          const encoderLabel = { 'h264_nvenc': 'NVIDIA', 'h264_qsv': 'Intel', 'h264_amf': 'AMD', 'libx264': 'CPU' }[encoder] || encoder;
+
+          const args = [
+            '-y',
+            '-ss', String(trimStart),
+            ...(effectiveDuration > 0 ? ['-t', String(effectiveDuration)] : []),
+            '-i', videoPath,
+            '-vf', videoFilter,
+            '-af', audioFilter,
+            ...encoderFlags,
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-ar', '48000',
+            '-movflags', '+faststart',
+            '-progress', 'pipe:1',
+            outputPath,
+          ];
+
+          console.log(`[FFmpeg] Subtitle mode command: ${ffmpegPath} ${args.join(' ')}`);
+          const ffmpeg = spawn(ffmpegPath, args);
+          let duration = 0;
+          const stderrLines: string[] = [];
+
+          ffmpeg.stderr.on('data', (data: Buffer) => {
+            const line = data.toString();
+            for (const l of line.split(/\r?\n/)) {
+              const trimmed = l.trim();
+              if (!trimmed) continue;
+              stderrLines.push(trimmed);
+              if (stderrLines.length > 200) stderrLines.shift();
+            }
+            const durationMatch = line.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
+            if (durationMatch) {
+              const [, hours, minutes, seconds] = durationMatch;
+              duration = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
+            }
+          });
+
+          ffmpeg.stdout.on('data', (data: Buffer) => {
+            const line = data.toString();
+            const timeMatch = line.match(/out_time_ms=(\d+)/);
+            const speedMatch = line.match(/speed=\s*([\d.]+)x/);
+            const fpsMatch = line.match(/fps=\s*([\d.]+)/);
+            if (timeMatch && duration > 0) {
+              const currentTime = parseInt(timeMatch[1]) / 1000000;
+              const progress = Math.min(99, Math.round((currentTime / duration) * 100));
+              onProgress({
+                videoPath,
+                progress,
+                stage: 'processing',
+                message: `Processando legenda... ${progress}% (${encoderLabel})`,
+                fps: fpsMatch ? parseFloat(fpsMatch[1]) : undefined,
+                speed: speedMatch ? `${speedMatch[1]}x` : undefined,
+              });
+            }
+          });
+
+          return new Promise<{ code: number | null; stderrTail: string; stderrAll: string; encoder: string }>((res) => {
+            ffmpeg.on('close', (code) => {
+              const stderrAll = stderrLines.join('\n');
+              const stderrTail = stderrLines.slice(-25).join('\n');
+              res({ code, stderrTail, stderrAll, encoder });
+            });
+            ffmpeg.on('error', (error) => {
+              const stderrAll = stderrLines.join('\n');
+              const stderrTail = stderrLines.slice(-25).join('\n');
+              res({ code: -1, stderrTail, stderrAll: `${stderrAll}\n${error.message}`.trim(), encoder });
+            });
+          });
+        };
+
+        // Try encoders in order
+        let lastResult: { code: number | null; stderrTail: string; stderrAll: string; encoder: string } | null = null;
+        for (let i = 0; i < encodersToTry.length; i++) {
+          const encoder = encodersToTry[i];
+          const result = await runSubtitleEncode(encoder);
+          lastResult = result;
+          if (result.code === 0) {
+            onProgress({ videoPath, progress: 100, stage: 'done', message: 'Concluído!' });
+            resolve({ success: true, outputPath });
+            return;
+          }
+          const s = result.stderrAll.toLowerCase();
+          const isInitFail = s.includes('cannot load') || s.includes('no nvenc') || s.includes('error while opening encoder') || s.includes('could not open encoder');
+          if (i < encodersToTry.length - 1 && isInitFail) continue;
+          break;
+        }
+
+        const hint = lastResult?.stderrTail ? `\n\n--- FFmpeg stderr ---\n${lastResult.stderrTail}` : '';
+        onProgress({ videoPath, progress: 0, stage: 'error', message: `FFmpeg erro código ${lastResult?.code}${hint}` });
+        resolve({ success: false, error: `FFmpeg exit code: ${lastResult?.code}${hint}` });
+        return;
+      }
+
+      // ===== NORMAL MODE (template + green area + chroma key) =====
       let frameAnalysis: FrameAnalysis | null = null;
       let aiOffsetX = 0;
       let aiOffsetY = 0;
       let borderCropFilter: string | null = null;
-      const isSubtitleMode = !!settings.useSubtitleMode;
+      const isSubModeNormal = false; // subtitle mode already handled above
 
        // Resolve output canvas size from the actual template file.
-       // This keeps overlay coordinates (greenArea x/y) consistent across any template resolution.
        const templateDims = await getImageDimensions(templatePath);
        const outW = templateDims?.width ?? 1080;
        const outH = templateDims?.height ?? 1920;
 
       // STEP 1: Detect and remove any black/white borders from the video
-      // This runs before AI analysis to ensure we're analyzing clean content
       onProgress({
         videoPath,
         progress: 0,
@@ -447,33 +622,6 @@ export function processVideo(
       try {
         const borderInfo = await detectVideoBorders(videoPath, 3);
         if (borderInfo.hasBorders) {
-          // In subtitle/text mode, expand the detected content area with extra vertical margin
-          // so text at top/bottom doesn't get cut flush
-          if (isSubtitleMode) {
-            // Small surgical margin: just enough to avoid cutting text flush with content edge
-            // Do NOT use large percentages - that re-includes the borders and breaks detection
-            const extraMarginY = Math.max(4, Math.round(borderInfo.originalHeight * 0.005)); // ~0.5% or 4px min
-            const extraMarginX = 2; // minimal horizontal safety
-
-            // Only expand if it doesn't bring us back to near-original size (which means borders are included again)
-            const maxExpandedHeight = borderInfo.originalHeight - 8; // must stay at least 8px smaller than original
-            const newY = Math.max(0, borderInfo.y - extraMarginY);
-            const newX = Math.max(0, borderInfo.x - extraMarginX);
-            let newH = Math.min(borderInfo.originalHeight - newY, borderInfo.height + extraMarginY * 2);
-            let newW = Math.min(borderInfo.originalWidth - newX, borderInfo.width + extraMarginX * 2);
-
-            // Guard: don't expand so much that we undo the border removal
-            if (newH < maxExpandedHeight) {
-              borderInfo.y = newY;
-              borderInfo.x = newX;
-              borderInfo.width = newW % 2 === 0 ? newW : newW - 1;
-              borderInfo.height = newH % 2 === 0 ? newH : newH - 1;
-              console.log(`[FFmpeg] Subtitle mode: expanded crop by ${extraMarginY}px top/bottom (safe)`);
-            } else {
-              console.log(`[FFmpeg] Subtitle mode: skipped expansion (would re-include borders)`);
-            }
-          }
-
           borderCropFilter = generateCropFilter(borderInfo);
           console.log('[FFmpeg] Border detection: will crop', borderCropFilter);
           onProgress({
@@ -566,31 +714,18 @@ export function processVideo(
       const expandedWidth = makeEven(width + (margin * 2));
       const expandedHeight = makeEven(height + (margin * 2));
 
-      // Subtitle mode uses CONTAIN (fit entire video, no cropping) instead of COVER (crop to fill)
-
       let scaleExpr: string;
       let cropExpr: string | null;
 
-      if (isSubtitleMode) {
-        // CONTAIN mode: scale to fit entirely within the area with generous breathing room
-        // ~10% padding so text at top/bottom has clear space and never gets cut
-        const padPercent = 0.10;
-        const innerW = makeEven(Math.floor(expandedWidth * (1 - padPercent)));
-        const innerH = makeEven(Math.floor(expandedHeight * (1 - padPercent)));
-        scaleExpr = `scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease:flags=lanczos`;
-        cropExpr = null; // No crop needed
-        console.log('[FFmpeg] Subtitle mode: CONTAIN with 5% breathing room');
-      } else {
-        // TRUE "cover" mode (cross-machine reliable):
-        const safeWidth = makeEven(expandedWidth + 4);
-        const safeHeight = makeEven(expandedHeight + 4);
-        
-        scaleExpr = `scale=${safeWidth}:${safeHeight}:force_original_aspect_ratio=increase:flags=lanczos`;
-        
-        const cropXExpr = `floor((iw-${expandedWidth})*${aiOffsetX})`;
-        const cropYExpr = `floor((ih-${expandedHeight})*${aiOffsetY})`;
-        cropExpr = `crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr}`;
-      }
+      // TRUE "cover" mode (cross-machine reliable):
+      const safeWidth = makeEven(expandedWidth + 4);
+      const safeHeight = makeEven(expandedHeight + 4);
+      
+      scaleExpr = `scale=${safeWidth}:${safeHeight}:force_original_aspect_ratio=increase:flags=lanczos`;
+      
+      const cropXExpr = `floor((iw-${expandedWidth})*${aiOffsetX})`;
+      const cropYExpr = `floor((ih-${expandedHeight})*${aiOffsetY})`;
+      cropExpr = `crop=${expandedWidth}:${expandedHeight}:${cropXExpr}:${cropYExpr}`;
 
       // Build video filter pipeline
       const videoPipelineSteps: (string | null)[] = [
@@ -598,11 +733,6 @@ export function processVideo(
         scaleExpr,
         cropExpr,
       ];
-
-      // In subtitle mode, pad to exact size centering the content (black fills breathing room)
-      if (isSubtitleMode) {
-        videoPipelineSteps.push(`pad=${expandedWidth}:${expandedHeight}:(ow-iw)/2:(oh-ih)/2:black`);
-      }
 
       videoPipelineSteps.push('unsharp=3:3:0.3:3:3:0.1'); // Subtle sharpening
 
