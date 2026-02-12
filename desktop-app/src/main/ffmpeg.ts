@@ -432,16 +432,20 @@ export function processVideo(
         const TOP = settings.subtitleTop ?? 520;
         const BOTTOM = settings.subtitleBottom ?? 80;
         const BOXH = 1920 - TOP - BOTTOM;
-        const CANVAS_W = 1080;
-        const CANVAS_H = 1920;
 
-        console.log(`[FFmpeg] Subtitle mode: TOP=${TOP}, BOTTOM=${BOTTOM}, BOXH=${BOXH}`);
+        // Resolve template dimensions (use template if provided, otherwise fixed canvas)
+        const hasTemplate = templatePath && templatePath.length > 0 && existsSync(templatePath);
+        const templateDims = hasTemplate ? await getImageDimensions(templatePath) : null;
+        const CANVAS_W = templateDims?.width ?? 1080;
+        const CANVAS_H = templateDims?.height ?? 1920;
+
+        console.log(`[FFmpeg] Subtitle mode: TOP=${TOP}, BOTTOM=${BOTTOM}, BOXH=${BOXH}, template=${hasTemplate}, canvas=${CANVAS_W}x${CANVAS_H}`);
 
         onProgress({
           videoPath,
           progress: 5,
           stage: 'processing',
-          message: 'Preparando vídeo (modo legenda)...',
+          message: 'Preparando vídeo (encaixar abaixo do logo)...',
         });
 
         // Get video duration for trim
@@ -461,37 +465,52 @@ export function processVideo(
         const trimStart = settings.trimStart || 0.3;
         const effectiveDuration = videoDuration > 0 ? videoDuration - trimStart - (settings.trimEnd || 0.3) : 0;
 
-        // Build filter:
-        // 1. Scale to fit within CANVAS_W x BOXH keeping aspect ratio
-        // 2. Speed up to 1.2x (setpts + atempo)
-        // 3. Pad to full canvas with black, position at Y=TOP
-        // 4. Mirror if enabled
-        // 5. Subtle brightness oscillation
+        // Scale video to fit within CANVAS_W x BOXH keeping aspect ratio (NO CROP)
         const scaleExpr = `scale=w='if(gt(a,${CANVAS_W}/${BOXH}),${CANVAS_W},trunc(${BOXH}*a/2)*2)':h='if(gt(a,${CANVAS_W}/${BOXH}),trunc(${CANVAS_W}/a/2)*2,${BOXH})':flags=lanczos`;
-        const padExpr = `pad=${CANVAS_W}:${CANVAS_H}:(ow-iw)/2:${TOP}:color=black`;
 
-        const filterSteps: string[] = [
-          scaleExpr,
-          padExpr,
-        ];
+        let inputArgs: string[];
+        let filterArg: string[];
 
-        // Mirror
-        if (settings.useMirror) {
-          filterSteps.push('hflip');
+        if (hasTemplate) {
+          // WITH TEMPLATE: overlay scaled video on top of the template image
+          const videoSteps = [scaleExpr];
+          if (settings.useMirror) videoSteps.push('hflip');
+          videoSteps.push('setpts=PTS/1.05');
+          videoSteps.push("eq=brightness='0.008*sin(2*PI*t/5)':contrast='1.0+0.015*sin(2*PI*t/7)'");
+
+          const fc = [
+            `[0:v]${videoSteps.join(',')}[vid]`,
+            `[1:v]scale=${CANVAS_W}:${CANVAS_H}:flags=lanczos[tpl]`,
+            `[tpl][vid]overlay=(W-w)/2:${TOP}:shortest=1,format=yuv420p[out]`,
+          ].join(';');
+
+          inputArgs = [
+            '-y',
+            '-ss', String(trimStart),
+            ...(effectiveDuration > 0 ? ['-t', String(effectiveDuration)] : []),
+            '-i', videoPath,
+            '-i', templatePath,
+          ];
+          filterArg = ['-filter_complex', fc, '-map', '[out]', '-map', '0:a?'];
+        } else {
+          // WITHOUT TEMPLATE: pad with black background
+          const videoSteps = [
+            scaleExpr,
+            `pad=${CANVAS_W}:${CANVAS_H}:(ow-iw)/2:${TOP}:color=black`,
+          ];
+          if (settings.useMirror) videoSteps.push('hflip');
+          videoSteps.push('setpts=PTS/1.05');
+          videoSteps.push("eq=brightness='0.008*sin(2*PI*t/5)':contrast='1.0+0.015*sin(2*PI*t/7)'");
+          videoSteps.push('format=yuv420p');
+
+          inputArgs = [
+            '-y',
+            '-ss', String(trimStart),
+            ...(effectiveDuration > 0 ? ['-t', String(effectiveDuration)] : []),
+            '-i', videoPath,
+          ];
+          filterArg = ['-vf', videoSteps.join(',')];
         }
-
-        // Speed 1.2x
-        filterSteps.push("setpts=PTS/1.2");
-
-        // Subtle brightness animation (imperceptible to eye, detectable by algorithm)
-        filterSteps.push("eq=brightness='0.008*sin(2*PI*t/5)':contrast='1.0+0.015*sin(2*PI*t/7)'");
-
-        filterSteps.push('format=yuv420p');
-
-        const videoFilter = filterSteps.join(',');
-
-        // Audio: speed 1.2x with atempo
-        const audioFilter = 'atempo=1.2';
 
         // Build encoder list
         const encodersToTry: string[] = [];
@@ -508,12 +527,8 @@ export function processVideo(
           const encoderLabel = { 'h264_nvenc': 'NVIDIA', 'h264_qsv': 'Intel', 'h264_amf': 'AMD', 'libx264': 'CPU' }[encoder] || encoder;
 
           const args = [
-            '-y',
-            '-ss', String(trimStart),
-            ...(effectiveDuration > 0 ? ['-t', String(effectiveDuration)] : []),
-            '-i', videoPath,
-            '-vf', videoFilter,
-            '-af', audioFilter,
+            ...inputArgs,
+            ...filterArg,
             ...encoderFlags,
             '-c:a', 'aac',
             '-b:a', '192k',
@@ -555,7 +570,7 @@ export function processVideo(
                 videoPath,
                 progress,
                 stage: 'processing',
-                message: `Processando legenda... ${progress}% (${encoderLabel})`,
+                message: `Processando... ${progress}% (${encoderLabel})`,
                 fps: fpsMatch ? parseFloat(fpsMatch[1]) : undefined,
                 speed: speedMatch ? `${speedMatch[1]}x` : undefined,
               });
