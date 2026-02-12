@@ -450,21 +450,28 @@ export function processVideo(
           // In subtitle/text mode, expand the detected content area with extra vertical margin
           // so text at top/bottom doesn't get cut flush
           if (isSubtitleMode) {
-            // Generous margins to NEVER cut text/captions at top or bottom
-            const extraMarginY = Math.max(24, Math.round(borderInfo.originalHeight * 0.06)); // at least 24px or 6% of height
-            const extraMarginX = Math.max(8, Math.round(borderInfo.originalWidth * 0.02)); // horizontal margin
+            // Small surgical margin: just enough to avoid cutting text flush with content edge
+            // Do NOT use large percentages - that re-includes the borders and breaks detection
+            const extraMarginY = Math.max(4, Math.round(borderInfo.originalHeight * 0.005)); // ~0.5% or 4px min
+            const extraMarginX = 2; // minimal horizontal safety
 
-            // Expand crop area: move Y up & increase height, clamp to original bounds
-            borderInfo.y = Math.max(0, borderInfo.y - extraMarginY);
-            borderInfo.x = Math.max(0, borderInfo.x - extraMarginX);
-            // Expand width/height but don't exceed original dimensions
-            borderInfo.width = Math.min(borderInfo.originalWidth - borderInfo.x, borderInfo.width + extraMarginX * 2);
-            borderInfo.height = Math.min(borderInfo.originalHeight - borderInfo.y, borderInfo.height + extraMarginY * 2);
-            // Keep even
-            borderInfo.width = borderInfo.width % 2 === 0 ? borderInfo.width : borderInfo.width - 1;
-            borderInfo.height = borderInfo.height % 2 === 0 ? borderInfo.height : borderInfo.height - 1;
+            // Only expand if it doesn't bring us back to near-original size (which means borders are included again)
+            const maxExpandedHeight = borderInfo.originalHeight - 8; // must stay at least 8px smaller than original
+            const newY = Math.max(0, borderInfo.y - extraMarginY);
+            const newX = Math.max(0, borderInfo.x - extraMarginX);
+            let newH = Math.min(borderInfo.originalHeight - newY, borderInfo.height + extraMarginY * 2);
+            let newW = Math.min(borderInfo.originalWidth - newX, borderInfo.width + extraMarginX * 2);
 
-            console.log(`[FFmpeg] Subtitle mode: expanded crop area by ${extraMarginY}px top/bottom for text safety`);
+            // Guard: don't expand so much that we undo the border removal
+            if (newH < maxExpandedHeight) {
+              borderInfo.y = newY;
+              borderInfo.x = newX;
+              borderInfo.width = newW % 2 === 0 ? newW : newW - 1;
+              borderInfo.height = newH % 2 === 0 ? newH : newH - 1;
+              console.log(`[FFmpeg] Subtitle mode: expanded crop by ${extraMarginY}px top/bottom (safe)`);
+            } else {
+              console.log(`[FFmpeg] Subtitle mode: skipped expansion (would re-include borders)`);
+            }
           }
 
           borderCropFilter = generateCropFilter(borderInfo);
