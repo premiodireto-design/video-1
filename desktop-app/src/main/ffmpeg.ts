@@ -427,6 +427,7 @@ export function processVideo(
       let aiOffsetX = 0;
       let aiOffsetY = 0;
       let borderCropFilter: string | null = null;
+      const isSubtitleMode = !!settings.useSubtitleMode;
 
        // Resolve output canvas size from the actual template file.
        // This keeps overlay coordinates (greenArea x/y) consistent across any template resolution.
@@ -446,6 +447,25 @@ export function processVideo(
       try {
         const borderInfo = await detectVideoBorders(videoPath, 3);
         if (borderInfo.hasBorders) {
+          // In subtitle/text mode, expand the detected content area with extra vertical margin
+          // so text at top/bottom doesn't get cut flush
+          if (isSubtitleMode) {
+            const extraMarginY = Math.max(12, Math.round(borderInfo.originalHeight * 0.03)); // at least 12px or 3% of height
+            const extraMarginX = Math.max(6, Math.round(borderInfo.originalWidth * 0.01)); // small horizontal margin too
+
+            // Expand crop area: move Y up & increase height, clamp to original bounds
+            borderInfo.y = Math.max(0, borderInfo.y - extraMarginY);
+            borderInfo.x = Math.max(0, borderInfo.x - extraMarginX);
+            // Expand width/height but don't exceed original dimensions
+            borderInfo.width = Math.min(borderInfo.originalWidth - borderInfo.x, borderInfo.width + extraMarginX * 2);
+            borderInfo.height = Math.min(borderInfo.originalHeight - borderInfo.y, borderInfo.height + extraMarginY * 2);
+            // Keep even
+            borderInfo.width = borderInfo.width % 2 === 0 ? borderInfo.width : borderInfo.width - 1;
+            borderInfo.height = borderInfo.height % 2 === 0 ? borderInfo.height : borderInfo.height - 1;
+
+            console.log(`[FFmpeg] Subtitle mode: expanded crop area by ${extraMarginY}px top/bottom for text breathing room`);
+          }
+
           borderCropFilter = generateCropFilter(borderInfo);
           console.log('[FFmpeg] Border detection: will crop', borderCropFilter);
           onProgress({
@@ -539,7 +559,6 @@ export function processVideo(
       const expandedHeight = makeEven(height + (margin * 2));
 
       // Subtitle mode uses CONTAIN (fit entire video, no cropping) instead of COVER (crop to fill)
-      const isSubtitleMode = !!settings.useSubtitleMode;
 
       let scaleExpr: string;
       let cropExpr: string | null;
