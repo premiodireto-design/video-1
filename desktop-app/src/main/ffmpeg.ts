@@ -475,7 +475,7 @@ export function processVideo(
           // WITH TEMPLATE: overlay scaled video on top of the template image
           // Position video slightly below TOP to avoid covering the logo
           const videoY = TOP + 10; // 10px extra padding below logo
-          const videoSteps = [scaleExpr];
+          const videoSteps = [scaleExpr, 'fps=30'];
           if (settings.useMirror) videoSteps.push('hflip');
           videoSteps.push('setpts=PTS/1.05');
           videoSteps.push("eq=brightness='0.008*sin(2*PI*t/5)':contrast='1.0+0.015*sin(2*PI*t/7)'");
@@ -484,17 +484,17 @@ export function processVideo(
             `[0:v]${videoSteps.join(',')}[vid]`,
             `[1:v]scale=${CANVAS_W}:${CANVAS_H}:flags=lanczos[tpl]`,
             `[tpl][vid]overlay=(W-w)/2:${videoY}:shortest=1,format=yuv420p[out]`,
+            `[0:a]atempo=1.05[aout]`,
           ].join(';');
 
           inputArgs = [
             '-y',
             '-ss', String(trimStart),
             ...(effectiveDuration > 0 ? ['-t', String(effectiveDuration)] : []),
-            '-r', '30',
             '-i', videoPath,
-            '-loop', '1', '-r', '30', '-i', templatePath,
+            '-loop', '1', '-i', templatePath,
           ];
-          filterArg = ['-filter_complex', fc + ';[0:a]atempo=1.05[aout]', '-map', '[out]', '-map', '[aout]'];
+          filterArg = ['-filter_complex', fc, '-map', '[out]', '-map', '[aout]'];
         } else {
           // WITHOUT TEMPLATE: pad with black background
           const videoSteps = [
