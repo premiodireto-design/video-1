@@ -473,6 +473,8 @@ export function processVideo(
 
         if (hasTemplate) {
           // WITH TEMPLATE: overlay scaled video on top of the template image
+          // Position video slightly below TOP to avoid covering the logo
+          const videoY = TOP + 10; // 10px extra padding below logo
           const videoSteps = [scaleExpr];
           if (settings.useMirror) videoSteps.push('hflip');
           videoSteps.push('setpts=PTS/1.05');
@@ -481,7 +483,7 @@ export function processVideo(
           const fc = [
             `[0:v]${videoSteps.join(',')}[vid]`,
             `[1:v]scale=${CANVAS_W}:${CANVAS_H}:flags=lanczos[tpl]`,
-            `[tpl][vid]overlay=(W-w)/2:${TOP}:shortest=1,format=yuv420p[out]`,
+            `[tpl][vid]overlay=(W-w)/2:${videoY}:shortest=1,format=yuv420p[out]`,
           ].join(';');
 
           inputArgs = [
@@ -489,7 +491,7 @@ export function processVideo(
             '-ss', String(trimStart),
             ...(effectiveDuration > 0 ? ['-t', String(effectiveDuration)] : []),
             '-i', videoPath,
-            '-i', templatePath,
+            '-loop', '1', '-i', templatePath,
           ];
           filterArg = ['-filter_complex', fc, '-map', '[out]', '-map', '0:a?'];
         } else {
@@ -530,6 +532,9 @@ export function processVideo(
             ...inputArgs,
             ...filterArg,
             ...encoderFlags,
+            '-vsync', 'cfr',
+            '-bf', '0',
+            '-g', '30',
             '-c:a', 'aac',
             '-b:a', '192k',
             '-ar', '48000',
