@@ -484,7 +484,7 @@ export function processVideo(
             `[0:v]${videoSteps.join(',')}[vid]`,
             `[1:v]scale=${CANVAS_W}:${CANVAS_H}:flags=lanczos[tpl]`,
             `[tpl][vid]overlay=(W-w)/2:${videoY}:shortest=1,format=yuv420p[out]`,
-            `[0:a]atempo=1.05[aout]`,
+            `[0:a]atempo=1.05,aresample=async=1000,asetpts=N/SR/TB[aout]`,
           ].join(';');
 
           inputArgs = [
