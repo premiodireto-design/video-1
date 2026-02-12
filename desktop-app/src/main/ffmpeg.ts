@@ -588,8 +588,11 @@ export function processVideo(
             return;
           }
           const s = result.stderrAll.toLowerCase();
-          const isInitFail = s.includes('cannot load') || s.includes('no nvenc') || s.includes('error while opening encoder') || s.includes('could not open encoder');
-          if (i < encodersToTry.length - 1 && isInitFail) continue;
+          const isEncoderFail = s.includes('cannot load') || s.includes('no nvenc') || s.includes('error while opening encoder') || s.includes('could not open encoder') || s.includes('submitinput') || s.includes('unknown error occurred') || (s.includes('amf') && s.includes('failed')) || s.includes('error encoding a frame');
+          if (i < encodersToTry.length - 1 && isEncoderFail) {
+            console.log(`[FFmpeg] Encoder ${encoder} failed, trying next...`);
+            continue;
+          }
           break;
         }
 
