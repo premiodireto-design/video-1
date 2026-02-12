@@ -39,6 +39,8 @@ export default function App() {
   const [useTeste, setUseTeste] = useState(false);
   const [useMirror, setUseMirror] = useState(false);
   const [useSubtitleMode, setUseSubtitleMode] = useState(false);
+  const [subtitleTop, setSubtitleTop] = useState(520);
+  const [subtitleBottom, setSubtitleBottom] = useState(80);
 
   useEffect(() => {
     // Detect GPU on mount
@@ -99,7 +101,9 @@ export default function App() {
   };
 
   const handleProcess = async () => {
-    if (!template || !outputFolder || videos.length === 0 || !greenArea) return;
+    // Subtitle mode doesn't need template/greenArea
+    if (!outputFolder || videos.length === 0) return;
+    if (!useSubtitleMode && (!template || !greenArea)) return;
 
     setIsProcessing(true);
 
@@ -118,19 +122,21 @@ export default function App() {
       try {
         await window.electronAPI.processVideo({
           videoPath: video.path,
-          templatePath: template,
+          templatePath: template || '',
           outputPath,
-          greenArea,
+          greenArea: greenArea || { x: 0, y: 0, width: 1080, height: 1920 },
           settings: {
             useGPU,
             encoder: gpuInfo?.recommendedEncoder || 'libx264',
             quality,
-            trimStart: 0.5,
-            trimEnd: 0.5,
-            useAiFraming,
+            trimStart: useSubtitleMode ? 0.3 : 0.5,
+            trimEnd: useSubtitleMode ? 0.3 : 0.5,
+            useAiFraming: useSubtitleMode ? false : useAiFraming,
             useTeste,
             useMirror,
             useSubtitleMode,
+            subtitleTop,
+            subtitleBottom,
           },
         });
       } catch (error) {
@@ -234,9 +240,40 @@ export default function App() {
               onChange={(e) => setUseSubtitleMode(e.target.checked)}
               className="w-4 h-4"
             />
-            <span className="text-sm">📝 Vídeo com Legenda</span>
+            <span className="text-sm">📝 Encaixar abaixo do logo</span>
           </label>
         </div>
+        {/* Subtitle mode TOP/BOTTOM inputs */}
+        {useSubtitleMode && (
+          <div className="flex items-center gap-4 mt-3 ml-2 p-3 bg-background/50 rounded-lg border border-primary/20">
+            <span className="text-xs text-muted-foreground">📐</span>
+            <label className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">TOP (px):</span>
+              <input
+                type="number"
+                value={subtitleTop}
+                onChange={(e) => setSubtitleTop(Math.max(0, Math.min(1400, parseInt(e.target.value) || 0)))}
+                className="w-20 px-2 py-1 text-sm rounded border bg-background"
+                min={0}
+                max={1400}
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">BOTTOM (px):</span>
+              <input
+                type="number"
+                value={subtitleBottom}
+                onChange={(e) => setSubtitleBottom(Math.max(0, Math.min(800, parseInt(e.target.value) || 0)))}
+                className="w-20 px-2 py-1 text-sm rounded border bg-background"
+                min={0}
+                max={800}
+              />
+            </label>
+            <span className="text-xs text-muted-foreground">
+              Área do vídeo: {1920 - subtitleTop - subtitleBottom}px
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Main Grid */}
@@ -367,12 +404,12 @@ export default function App() {
       {/* Process button */}
       <button
         onClick={handleProcess}
-        disabled={!template || !greenArea || !outputFolder || queuedCount === 0 || isProcessing}
+        disabled={!outputFolder || queuedCount === 0 || isProcessing || (!useSubtitleMode && (!template || !greenArea))}
         className="w-full py-4 bg-primary text-primary-foreground font-bold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors text-lg"
       >
         {isProcessing
           ? 'Processando...'
-          : !greenArea && template
+          : !useSubtitleMode && !greenArea && template
           ? '⚠️ Template sem área verde detectada'
           : queuedCount > 0
           ? `🚀 Processar ${queuedCount} vídeo(s)`
