@@ -545,17 +545,16 @@ export function processVideo(
       let cropExpr: string | null;
 
       if (isSubtitleMode) {
-        // CONTAIN mode: scale to fit entirely within the area, pad with black if needed
-        // This ensures subtitles at the bottom are never cropped
-        scaleExpr = `scale=${expandedWidth}:${expandedHeight}:force_original_aspect_ratio=decrease:flags=lanczos`;
-        // Pad to exact size, centering the video (black bars fill the rest)
+        // CONTAIN mode: scale to fit entirely within the area with breathing room
+        // Add ~5% padding so text at top/bottom isn't rente (flush against edge)
+        const padPercent = 0.05;
+        const innerW = makeEven(Math.floor(expandedWidth * (1 - padPercent)));
+        const innerH = makeEven(Math.floor(expandedHeight * (1 - padPercent)));
+        scaleExpr = `scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease:flags=lanczos`;
         cropExpr = null; // No crop needed
-        console.log('[FFmpeg] Subtitle mode: using CONTAIN (fit) instead of COVER');
+        console.log('[FFmpeg] Subtitle mode: CONTAIN with 5% breathing room');
       } else {
         // TRUE "cover" mode (cross-machine reliable):
-        // 1) scale to a size SLIGHTLY bigger than we need (safeW/safeH)
-        //    using force_original_aspect_ratio=increase (guarantees cover)
-        // 2) crop back to the exact expanded size using the AI anchors
         const safeWidth = makeEven(expandedWidth + 4);
         const safeHeight = makeEven(expandedHeight + 4);
         
@@ -568,12 +567,12 @@ export function processVideo(
 
       // Build video filter pipeline
       const videoPipelineSteps: (string | null)[] = [
-        borderCropFilter, // null if no borders (will be filtered out)
+        borderCropFilter,
         scaleExpr,
-        cropExpr, // null in subtitle mode (no crop)
+        cropExpr,
       ];
 
-      // In subtitle mode, pad to exact size centering the content
+      // In subtitle mode, pad to exact size centering the content (black fills breathing room)
       if (isSubtitleMode) {
         videoPipelineSteps.push(`pad=${expandedWidth}:${expandedHeight}:(ow-iw)/2:(oh-ih)/2:black`);
       }
