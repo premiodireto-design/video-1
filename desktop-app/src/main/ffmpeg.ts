@@ -545,9 +545,9 @@ export function processVideo(
       let cropExpr: string | null;
 
       if (isSubtitleMode) {
-        // CONTAIN mode: scale to fit entirely within the area with breathing room
-        // Add ~5% padding so text at top/bottom isn't rente (flush against edge)
-        const padPercent = 0.05;
+        // CONTAIN mode: scale to fit entirely within the area with generous breathing room
+        // ~10% padding so text at top/bottom has clear space and never gets cut
+        const padPercent = 0.10;
         const innerW = makeEven(Math.floor(expandedWidth * (1 - padPercent)));
         const innerH = makeEven(Math.floor(expandedHeight * (1 - padPercent)));
         scaleExpr = `scale=${innerW}:${innerH}:force_original_aspect_ratio=decrease:flags=lanczos`;
