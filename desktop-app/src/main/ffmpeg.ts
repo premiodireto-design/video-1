@@ -597,6 +597,9 @@ export function processVideo(
         videoPipelineSteps.push('hflip');
       }
 
+      // Subtle dynamic brightness/contrast oscillation (applied only to the video inside the frame)
+      videoPipelineSteps.push("eq=brightness='0.01*sin(2*PI*t/6)':contrast='1.0+0.02*sin(2*PI*t/7)'");
+
       videoPipelineSteps.push('setsar=1', 'format=rgb24');
       const videoPipeline = videoPipelineSteps.filter(Boolean).join(',');
 
