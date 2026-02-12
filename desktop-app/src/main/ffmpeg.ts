@@ -490,10 +490,11 @@ export function processVideo(
             '-y',
             '-ss', String(trimStart),
             ...(effectiveDuration > 0 ? ['-t', String(effectiveDuration)] : []),
+            '-r', '30',
             '-i', videoPath,
-            '-loop', '1', '-i', templatePath,
+            '-loop', '1', '-r', '30', '-i', templatePath,
           ];
-          filterArg = ['-filter_complex', fc, '-map', '[out]', '-map', '0:a?'];
+          filterArg = ['-filter_complex', fc + ';[0:a]atempo=1.05[aout]', '-map', '[out]', '-map', '[aout]'];
         } else {
           // WITHOUT TEMPLATE: pad with black background
           const videoSteps = [
@@ -511,7 +512,7 @@ export function processVideo(
             ...(effectiveDuration > 0 ? ['-t', String(effectiveDuration)] : []),
             '-i', videoPath,
           ];
-          filterArg = ['-vf', videoSteps.join(',')];
+          filterArg = ['-vf', videoSteps.join(','), '-af', 'atempo=1.05'];
         }
 
         // Build encoder list
