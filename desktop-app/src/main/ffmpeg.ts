@@ -775,20 +775,20 @@ export function processVideo(
       // Subtle dynamic brightness/contrast oscillation (applied only to the video inside the frame)
       videoPipelineSteps.push("eq=brightness='0.01*sin(2*PI*t/6)':contrast='1.0+0.02*sin(2*PI*t/7)'");
 
-      videoPipelineSteps.push('setsar=1', 'format=rgb24');
+      videoPipelineSteps.push('setsar=1');
       const videoPipeline = videoPipelineSteps.filter(Boolean).join(',');
 
       const filterComplex = [
-        // Step 1: Process video (remove borders → scale → crop → sharpen → format)
+        // Step 1: Process video (remove borders → scale → crop → sharpen)
         `[0:v]${videoPipeline}[vid]`,
         // Template with HIGH QUALITY Lanczos scaling + chroma key
-        // flags=lanczos ensures the template PNG stays crisp and sharp
-        `[1:v]scale=${outW}:${outH}:flags=lanczos,format=rgba,chromakey=0x00FF00:0.25:0.08[mask]`,
-        // Infinite black background at full resolution
+        // Lower similarity (0.20) and blend (0.05) to keep template sharp and avoid eating into edges
+        `[1:v]scale=${outW}:${outH}:flags=lanczos+accurate_rnd+full_chroma_int,format=rgba,chromakey=0x00FF00:0.20:0.05[mask]`,
+        // Black background at full resolution
         `color=black:s=${outW}x${outH}[bg]`,
         // Overlay video in green area (slightly oversized to cover completely with margin overlap)
         `[bg][vid]overlay=${x}:${y}:shortest=1[base]`,
-        // Overlay template on top, then convert to yuv420p with high quality chroma subsampling
+        // Overlay template on top, then convert to yuv420p with HIGH QUALITY chroma subsampling
         `[base][mask]overlay=0:0:shortest=1,format=yuv420p[out]`,
       ].join(';');
 
@@ -842,6 +842,7 @@ export function processVideo(
 
       const args = [
         '-y', // Overwrite output
+        '-sws_flags', 'lanczos+accurate_rnd+full_chroma_int', // Global high-quality scaling
         '-i', videoPath,
         // Loop template image for the entire processing duration
         '-loop', '1',
